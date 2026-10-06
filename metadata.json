@@ -1,0 +1,6 @@
+{
+  "name": "MERIDIANO - China Sourcing & International Trade",
+  "description": "Connecting businesses with verified manufacturers in China at true factory pricing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
