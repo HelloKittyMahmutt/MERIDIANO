@@ -4,14 +4,14 @@ import { ForkliftDiagnosticViewer } from './components/diagnostic/ForkliftDiagno
 import { CinematicScrollExperience } from './components/cinematic/CinematicScrollExperience';
 
 export default function App() {
-  // Support URL param ?mode=diagnostic or ?mode=cinematic, default to diagnostic for immediate production verification
+  // Support URL param ?mode=diagnostic or ?mode=cinematic, default to cinematic master experience
   const [viewMode, setViewMode] = useState<'diagnostic' | 'cinematic'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get('mode');
-      if (mode === 'cinematic') return 'cinematic';
+      if (mode === 'diagnostic') return 'diagnostic';
     }
-    return 'diagnostic';
+    return 'cinematic';
   });
 
   const switchToCinematic = () => {
