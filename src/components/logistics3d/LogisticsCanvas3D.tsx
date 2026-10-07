@@ -513,7 +513,7 @@ export const LogisticsCanvas3D: React.FC<LogisticsCanvas3DProps> = ({
 
           // Cargo Airplane Model
           const planeGroup = new THREE.Group();
-          const plane = await loadModel('/public/models/cargo-plane.glb');
+          const plane = await loadModel('/models/cargo-plane.glb');
           normalizeModel(plane, 10.5, true);
           plane.rotation.set(-Math.PI / 2, 0, -Math.PI / 2);
           planeGroup.add(plane);

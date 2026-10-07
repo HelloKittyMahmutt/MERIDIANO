@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { ArrowDown, Volume2, VolumeX } from 'lucide-react';
+import { ArrowDown, Volume2, VolumeX, Wrench } from 'lucide-react';
 import { audioEngine } from '../logistics3d/audioEngine';
+import { getModelUrl } from '../../utils/modelUrl';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -15,7 +16,13 @@ interface Keyframe {
   fov: number;
 }
 
-export const CinematicScrollExperience: React.FC = () => {
+interface CinematicScrollExperienceProps {
+  onSwitchToDiagnostic?: () => void;
+}
+
+export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps> = ({
+  onSwitchToDiagnostic,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrollTrackRef = useRef<HTMLDivElement>(null);
 
@@ -197,7 +204,7 @@ export const CinematicScrollExperience: React.FC = () => {
     return { pos, target, fov };
   };
 
-  // Helper to load GLB with progress
+  // Helper to load GLB with progress, error handling and fallback
   const loadGLTF = (loader: GLTFLoader, url: string): Promise<THREE.Group> => {
     return new Promise((resolve, reject) => {
       loader.load(
@@ -206,7 +213,23 @@ export const CinematicScrollExperience: React.FC = () => {
           resolve(gltf.scene);
         },
         undefined,
-        (err) => reject(err)
+        (err) => {
+          console.warn(`Primary load failed for ${url}, trying fallback path:`, err);
+          // Try fallback if primary was /models/ or /public/models/
+          const fallback = url.startsWith('/models/') ? `/public${url}` : url.replace('/public', '');
+          loader.load(
+            fallback,
+            (gltfFallback) => {
+              console.log(`Fallback succeeded for ${fallback}`);
+              resolve(gltfFallback.scene);
+            },
+            undefined,
+            (err2) => {
+              console.error(`Both paths failed for model ${url}:`, err2);
+              reject(err);
+            }
+          );
+        }
       );
     });
   };
@@ -214,6 +237,9 @@ export const CinematicScrollExperience: React.FC = () => {
   // 1. Initialize Full-Screen WebGL Experience
   useEffect(() => {
     if (!canvasRef.current) return;
+
+    // STEP 5: Required Console Log
+    console.log('MERIDIANO 3D CANVAS MOUNTED');
 
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -344,16 +370,21 @@ export const CinematicScrollExperience: React.FC = () => {
     let loadedCount = 0;
     const totalModels = 6;
 
-    const onModelLoaded = () => {
+    console.log('LOADING FLEET ASSETS: Forklift, Container, Truck, Chassis, Ship, Plane');
+
+    const onModelLoaded = (name: string) => {
       loadedCount++;
       setLoadPercent(Math.round((loadedCount / totalModels) * 100));
+      console.log(`MODEL LOADED (${loadedCount}/${totalModels}): ${name}`);
       if (loadedCount >= totalModels) {
         setLoading(false);
+        console.log('ALL 6 MERIDIANO FLEET MODELS LOADED SUCCESSFULLY');
       }
     };
 
     // 1. Forklift Model (Factory Dock)
-    loadGLTF(loader, '/public/models/forklift.glb')
+    console.log('LOADING FORKLIFT');
+    loadGLTF(loader, getModelUrl('forklift.glb'))
       .then((raw) => {
         const box = new THREE.Box3().setFromObject(raw);
         const center = box.getCenter(new THREE.Vector3());
@@ -371,15 +402,16 @@ export const CinematicScrollExperience: React.FC = () => {
         forkGroup.rotation.y = -Math.PI / 2 + 0.35;
         scene.add(forkGroup);
         modelsRef.current.forklift = forkGroup;
-        onModelLoaded();
+        console.log('FORKLIFT LOADED');
+        onModelLoaded('Forklift');
       })
       .catch((e) => {
         console.error('Forklift error:', e);
-        onModelLoaded();
+        onModelLoaded('Forklift (fallback error)');
       });
 
     // 2. Container Model (Factory Dock & Hero Moment)
-    loadGLTF(loader, '/public/models/container.glb')
+    loadGLTF(loader, getModelUrl('container.glb'))
       .then((raw) => {
         const box = new THREE.Box3().setFromObject(raw);
         const center = box.getCenter(new THREE.Vector3());
@@ -397,18 +429,18 @@ export const CinematicScrollExperience: React.FC = () => {
         contGroup.rotation.y = Math.PI / 2;
         scene.add(contGroup);
         modelsRef.current.containerStage1 = contGroup;
-        onModelLoaded();
+        onModelLoaded('Container Stage 1');
       })
       .catch((e) => {
         console.error('Container error:', e);
-        onModelLoaded();
+        onModelLoaded('Container Stage 1 (fallback error)');
       });
 
     // 3. Truck Tractor + Separate Chassis + Container Assembly (Highway Stage)
     Promise.all([
-      loadGLTF(loader, '/public/models/truck.glb'),
-      loadGLTF(loader, '/public/models/chassis.glb'),
-      loadGLTF(loader, '/public/models/container.glb'),
+      loadGLTF(loader, getModelUrl('truck.glb')),
+      loadGLTF(loader, getModelUrl('chassis.glb')),
+      loadGLTF(loader, getModelUrl('container.glb')),
     ])
       .then(([rawTruck, rawChassis, rawCont]) => {
         const truckCombo = new THREE.Group();
@@ -471,19 +503,19 @@ export const CinematicScrollExperience: React.FC = () => {
         scene.add(truckCombo);
         modelsRef.current.truckCombo = truckCombo;
 
-        onModelLoaded(); // truck
-        onModelLoaded(); // chassis
-        onModelLoaded(); // container on truck
+        onModelLoaded('Truck');
+        onModelLoaded('Chassis');
+        onModelLoaded('Highway Container');
       })
       .catch((e) => {
         console.error('Truck combo load error:', e);
-        onModelLoaded();
-        onModelLoaded();
-        onModelLoaded();
+        onModelLoaded('Truck (fallback error)');
+        onModelLoaded('Chassis (fallback error)');
+        onModelLoaded('Highway Container (fallback error)');
       });
 
     // 4. Container Ship (Maritime Stage)
-    loadGLTF(loader, '/public/models/container-ship.glb')
+    loadGLTF(loader, getModelUrl('container-ship.glb'))
       .then((raw) => {
         const box = new THREE.Box3().setFromObject(raw);
         const center = box.getCenter(new THREE.Vector3());
@@ -501,15 +533,15 @@ export const CinematicScrollExperience: React.FC = () => {
         shipGroup.rotation.y = Math.PI / 2 + 0.15;
         scene.add(shipGroup);
         modelsRef.current.shipGroup = shipGroup;
-        onModelLoaded();
+        onModelLoaded('Container Ship');
       })
       .catch((e) => {
         console.error('Ship error:', e);
-        onModelLoaded();
+        onModelLoaded('Container Ship (fallback error)');
       });
 
     // 5. Cargo Plane (High Altitude Stratosphere)
-    loadGLTF(loader, '/public/models/cargo-plane.glb')
+    loadGLTF(loader, getModelUrl('cargo-plane.glb'))
       .then((raw) => {
         // Double-side all meshes to guarantee visibility
         raw.traverse((c) => {
@@ -545,11 +577,11 @@ export const CinematicScrollExperience: React.FC = () => {
         planeGroup.position.set(0, 112.0, -325.0);
         scene.add(planeGroup);
         modelsRef.current.planeGroup = planeGroup;
-        onModelLoaded();
+        onModelLoaded('Cargo Plane');
       })
       .catch((e) => {
         console.error('Plane error:', e);
-        onModelLoaded();
+        onModelLoaded('Cargo Plane (fallback error)');
       });
 
     // G. Animation Render Loop (Controlled strictly by scroll progress)
@@ -710,6 +742,19 @@ export const CinematicScrollExperience: React.FC = () => {
             GLOBAL LOGISTICS
           </span>
         </div>
+
+        {/* Switch to Diagnostic Mode Button */}
+        {onSwitchToDiagnostic && (
+          <button
+            type="button"
+            onClick={onSwitchToDiagnostic}
+            className="flex items-center gap-2 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white px-3 py-1.5 rounded-full border border-slate-700 text-xs font-mono transition-all backdrop-blur-md shadow-xl"
+            title="Open Diagnostic Forklift View"
+          >
+            <Wrench className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Diagnostic Mode</span>
+          </button>
+        )}
       </div>
 
       {/* Top Right Sound Toggle */}

@@ -84,7 +84,7 @@ export const CargoPlaneCalibrationStudio: React.FC<CargoPlaneCalibrationStudioPr
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Load the cargo plane model using useGLTF
-  const { gltf, error: loadError, loading, progress } = useGLTF('/public/models/cargo-plane.glb');
+  const { gltf, error: loadError, loading, progress } = useGLTF('/models/cargo-plane.glb');
 
   // Inspection & Metrics State
   const [metrics, setMetrics] = useState<{
