@@ -34,22 +34,22 @@ export interface TruckAssemblyConfig {
 
 export const INITIAL_TRUCK_ASSEMBLY_CONFIG: TruckAssemblyConfig = {
   truck: {
-    scale: 0.1255, // Matches 2.64m chassis width and authentic 3.28m height
-    position: [-3.25, 0.0, 0.0], // Connects rear fifth-wheel to chassis kingpin
-    rotation: [0, -Math.PI / 2, 0], // Faces -X (Left in side view)
+    scale: 0.158,
+    position: [-1, 0.01, 0],
+    rotation: [0, -Math.PI / 2, 0],
   },
   chassis: {
-    scale: 1.0, // Chassis model is already modeled 1:1 in real meters
-    position: [0.0, 0.0, 0.0], // Kingpin at -1.18m, rear wheels at +9.5m
-    rotation: [0, 0, 0], // Length along X
+    scale: 0.98,
+    position: [-0.15, -0.01, 0],
+    rotation: [0, 0, 0],
   },
   container: {
-    scale: [0.01794, 0.00887, 0.00845], // ISO 40ft High Cube: 12.0m x 2.65m x 2.44m
-    position: [5.055, 1.559, 0.0], // Rests at chassis platform level (1.559m)
-    rotation: [0, 0, 0], // Length along X
+    scale: [0.018, 0.00887, 0.00845],
+    position: [4.9, 1.41, 0],
+    rotation: [0, 0, 0],
   },
   camera: {
-    position: [2.6, 3.8, 19.5], // Static cinematic 3/4 side view (occupies ~70% screen)
+    position: [2.6, 3.8, 19.5],
     target: [2.6, 1.8, 0.0],
     fov: 36,
   },

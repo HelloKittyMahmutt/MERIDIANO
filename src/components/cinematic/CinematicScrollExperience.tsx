@@ -6,6 +6,9 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ArrowDown, Volume2, VolumeX, Wrench } from 'lucide-react';
 import { audioEngine } from '../logistics3d/audioEngine';
 import { getModelUrl } from '../../utils/modelUrl';
+import { buildApprovedTruckAssembly, APPROVED_TRUCK_ASSEMBLY_CONFIG } from './truckAssemblyConfig';
+import { FORKLIFT_CONFIG } from './forkliftConfig';
+import { buildCalibratedAircraftRig, APPROVED_AIRCRAFT_CONFIG } from './aircraftConfig';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -19,6 +22,177 @@ interface Keyframe {
 interface CinematicScrollExperienceProps {
   onSwitchToDiagnostic?: () => void;
 }
+
+// ============================================================================
+// PROCEDURAL TEXTURE GENERATORS FOR REALISTIC LAND LOGISTICS ENVIRONMENT
+// ============================================================================
+
+// 1. Authentic Asphalt Road Surface Texture
+const createAsphaltTexture = (): THREE.CanvasTexture => {
+  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  // Deep neutral asphalt base
+  ctx.fillStyle = '#22262e';
+  ctx.fillRect(0, 0, 512, 512);
+
+  const imgData = ctx.getImageData(0, 0, 512, 512);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 26;
+    // Micro-specks for asphalt aggregate stone chips
+    const speck = Math.random() > 0.96 ? Math.random() * 40 : Math.random() < 0.04 ? -25 : 0;
+    const val = THREE.MathUtils.clamp(34 + noise + speck, 18, 70);
+    data[i] = val;
+    data[i + 1] = val + 1;
+    data[i + 2] = val + 3;
+    data[i + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 28);
+  texture.anisotropy = 8;
+  return texture;
+};
+
+// 2. Asphalt Micro-Roughness / Bump Map
+const createAsphaltBumpTexture = (): THREE.CanvasTexture => {
+  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  const imgData = ctx.createImageData(256, 256);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const grain = Math.random() * 255;
+    data[i] = grain;
+    data[i + 1] = grain;
+    data[i + 2] = grain;
+    data[i + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 56);
+  return texture;
+};
+
+// 3. Concrete Terminal Staging Apron Texture (Expansion Joints & Seams)
+const createConcreteApronTexture = (): THREE.CanvasTexture => {
+  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  ctx.fillStyle = '#454e5b';
+  ctx.fillRect(0, 0, 512, 512);
+
+  const imgData = ctx.getImageData(0, 0, 512, 512);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 20;
+    const base = 72 + noise;
+    data[i] = THREE.MathUtils.clamp(base - 1, 45, 115);
+    data[i + 1] = THREE.MathUtils.clamp(base, 45, 115);
+    data[i + 2] = THREE.MathUtils.clamp(base + 3, 45, 120);
+    data[i + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // Subtle concrete slab expansion joint border
+  ctx.strokeStyle = '#2d333e';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(0, 0, 512, 512);
+  ctx.beginPath();
+  ctx.moveTo(256, 0);
+  ctx.lineTo(256, 512);
+  ctx.moveTo(0, 256);
+  ctx.lineTo(512, 256);
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 6);
+  texture.anisotropy = 8;
+  return texture;
+};
+
+// 4. Photorealistic Soft Ambient Occlusion Contact Shadow Map
+const createContactShadowTexture = (type: 'radial' | 'rect'): THREE.CanvasTexture => {
+  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  ctx.clearRect(0, 0, 256, 256);
+  if (type === 'radial') {
+    const grad = ctx.createRadialGradient(128, 128, 10, 128, 128, 120);
+    grad.addColorStop(0, 'rgba(12, 17, 26, 0.88)');
+    grad.addColorStop(0.35, 'rgba(12, 17, 26, 0.65)');
+    grad.addColorStop(0.75, 'rgba(12, 17, 26, 0.20)');
+    grad.addColorStop(1, 'rgba(12, 17, 26, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(128, 128, 120, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const grad = ctx.createRadialGradient(128, 128, 45, 128, 128, 125);
+    grad.addColorStop(0, 'rgba(12, 17, 26, 0.92)');
+    grad.addColorStop(0.45, 'rgba(12, 17, 26, 0.68)');
+    grad.addColorStop(0.82, 'rgba(12, 17, 26, 0.22)');
+    grad.addColorStop(1, 'rgba(12, 17, 26, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 256, 256);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  return texture;
+};
+
+// 5. Realistic Daylight Sky Dome Mesh
+const createSkyDome = (): THREE.Mesh => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const grad = ctx.createLinearGradient(0, 0, 0, 512);
+    grad.addColorStop(0, '#6687a4');    // Soft daylight zenith
+    grad.addColorStop(0.5, '#99b6ce');  // Mid sky
+    grad.addColorStop(0.85, '#cad9e6'); // Near horizon
+    grad.addColorStop(1.0, '#d2e0ed');  // Horizon haze line
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 512);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  const geo = new THREE.SphereGeometry(950, 32, 20, 0, Math.PI * 2, 0, Math.PI * 0.5);
+  const mat = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+  });
+  const sky = new THREE.Mesh(geo, mat);
+  sky.position.set(0, -2, -100);
+  return sky;
+};
 
 export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps> = ({
   onSwitchToDiagnostic,
@@ -43,6 +217,7 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
     containerStage1?: THREE.Group;
     truckAssembly?: THREE.Group;
     shipGroup?: THREE.Group;
+    aircraftRig?: THREE.Group;
     planeGroup?: THREE.Group;
     roadGroup?: THREE.Group;
     oceanMesh?: THREE.Mesh;
@@ -67,143 +242,161 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
   // ==========================================================================
   const keyframes: Keyframe[] = [
     // --- STAGE 1: FORKLIFT + CONTAINER (0.00 - 0.14) ---
-    // Establishing composition on the factory loading bay floor
+    // Establishing 3/4 composition showing BOTH the industrial forklift and 12m container grounded in the logistics yard
     {
       progress: 0.0,
-      camPos: new THREE.Vector3(5.2, 1.8, 6.4),
-      target: new THREE.Vector3(0.0, 1.4, 0.6),
-      fov: 38,
+      camPos: new THREE.Vector3(8.8, 3.4, 9.8),
+      target: new THREE.Vector3(0.8, 1.6, 0.6),
+      fov: 42,
     },
     {
-      progress: 0.08,
-      camPos: new THREE.Vector3(3.6, 1.6, 4.8),
-      target: new THREE.Vector3(-0.4, 1.5, 0.4),
-      fov: 38,
+      progress: 0.07,
+      camPos: new THREE.Vector3(6.5, 2.6, 7.8),
+      target: new THREE.Vector3(0.4, 1.6, 0.4),
+      fov: 40,
     },
     {
       progress: 0.14,
-      camPos: new THREE.Vector3(2.2, 1.8, 3.6),
-      target: new THREE.Vector3(-0.8, 1.6, 0.2),
+      camPos: new THREE.Vector3(4.4, 2.1, 5.4),
+      target: new THREE.Vector3(0.0, 1.6, 0.2),
       fov: 38,
     },
 
     // --- STAGE 2: CONTAINER TRANSITION (0.14 - 0.24) ---
-    // Smoothly tracks along the navy container surface; safe distance, no clipping
+    // Smoothly tracks along the container flank towards the highway staging corridor
     {
       progress: 0.19,
-      camPos: new THREE.Vector3(0.4, 2.0, 3.2),
-      target: new THREE.Vector3(-1.0, 1.8, 0.0),
-      fov: 38,
+      camPos: new THREE.Vector3(2.0, 2.4, 2.8),
+      target: new THREE.Vector3(-0.8, 1.8, -3.0),
+      fov: 40,
     },
     {
       progress: 0.24,
-      camPos: new THREE.Vector3(-0.6, 2.2, 3.4),
-      target: new THREE.Vector3(-1.4, 1.8, -1.0),
-      fov: 40,
+      camPos: new THREE.Vector3(6.0, 3.2, -6.0),
+      target: new THREE.Vector3(0.0, 2.0, -18.0),
+      fov: 42,
     },
 
-    // --- STAGE 3: TRUCK + CHASSIS + CONTAINER (0.24 - 0.44) ---
-    // CRITICAL: Establishing 3/4 view of the COMPLETE TRUCK ASSEMBLY on the highway
+    // --- STAGE 3: TRUCK + CHASSIS + CONTAINER HIGHWAY MOTION (0.24 - 0.44) ---
+    // Establishing 3/4 view of the COMPLETE TRUCK ASSEMBLY on the highway
     // Vehicle occupies ~65% of viewport width. Recognizable: CAB + WHEELS + CHASSIS + CONTAINER
     {
       progress: 0.28,
-      camPos: new THREE.Vector3(15.5, 3.6, -18.0),
-      target: new THREE.Vector3(0.0, 2.0, -32.0),
+      camPos: new THREE.Vector3(18.0, 4.2, -14.0),
+      target: new THREE.Vector3(0.0, 2.2, -32.0),
       fov: 40,
     },
     {
-      progress: 0.35,
-      camPos: new THREE.Vector3(12.5, 3.0, -28.0),
+      progress: 0.36,
+      camPos: new THREE.Vector3(12.0, 2.6, -26.0),
       target: new THREE.Vector3(0.0, 2.2, -38.0),
       fov: 38,
     },
     {
       progress: 0.44,
-      camPos: new THREE.Vector3(14.0, 3.4, -42.0),
-      target: new THREE.Vector3(0.0, 2.4, -52.0),
+      camPos: new THREE.Vector3(11.0, 2.5, -42.0),
+      target: new THREE.Vector3(0.0, 2.4, -54.0),
       fov: 40,
     },
 
-    // --- STAGE 4: OCEAN + CONTAINER SHIP (0.44 - 0.64) ---
-    // Start with camera near water level. Show massive ship hull cutting through the sea
+    // --- STAGE 4: TRUCK -> SHIP EDITORIAL TRANSITION & CONTAINER SHIP (0.44 - 0.64) ---
+    // Truck accelerates forward down the road; camera pulls back and up slightly, surveying coastal horizon
     {
-      progress: 0.48,
-      camPos: new THREE.Vector3(30.0, 3.2, -108.0),
-      target: new THREE.Vector3(-6.0, 13.0, -145.0),
+      progress: 0.47,
+      camPos: new THREE.Vector3(22.0, 5.2, -55.0),
+      target: new THREE.Vector3(0.0, 2.8, -75.0),
+      fov: 44,
+    },
+    // ESTABLISHING SHIP SHOT: Revealed from a safe, majestic distance across the open water (~80m clearance)
+    // Water, horizon, and full 175m ship silhouette clearly readable. Zero hull clipping.
+    {
+      progress: 0.51,
+      camPos: new THREE.Vector3(65.0, 16.0, -135.0),
+      target: new THREE.Vector3(-15.0, 10.0, -195.0),
+      fov: 46,
+    },
+    // TRACKING SHIP SHOT: Moves closer to track alongside the towering hull at generous clearance (>50m away)
+    {
+      progress: 0.57,
+      camPos: new THREE.Vector3(42.0, 12.0, -175.0),
+      target: new THREE.Vector3(-15.0, 12.0, -205.0),
+      fov: 42,
+    },
+    {
+      progress: 0.63,
+      camPos: new THREE.Vector3(36.0, 16.0, -215.0),
+      target: new THREE.Vector3(-15.0, 14.0, -235.0),
+      fov: 42,
+    },
+
+    // --- STAGE 5: PHASE A — MARITIME DEPARTURE (0.64 - 0.73) ---
+    // Camera ascends smoothly away from the vessel; ship recedes below on the water, becoming smaller as altitude increases
+    {
+      progress: 0.68,
+      camPos: new THREE.Vector3(26.0, 36.0, -235.0),
+      target: new THREE.Vector3(-12.0, 12.0, -225.0),
       fov: 44,
     },
     {
-      progress: 0.56,
-      camPos: new THREE.Vector3(38.0, 6.5, -132.0),
-      target: new THREE.Vector3(-8.0, 16.0, -158.0),
+      progress: 0.73,
+      camPos: new THREE.Vector3(10.0, 68.0, -255.0),
+      target: new THREE.Vector3(-8.0, 16.0, -230.0),
+      fov: 45,
+    },
+
+    // --- STAGE 6: PHASE B — ATMOSPHERIC TRANSITION (0.73 - 0.81) ---
+    // Camera glides along a continuous, smooth vector through soft atmospheric haze; look target smoothly tilts up towards the flight corridor
+    {
+      progress: 0.77,
+      camPos: new THREE.Vector3(-12.0, 104.0, -275.0),
+      target: new THREE.Vector3(-4.0, 85.0, -315.0),
       fov: 42,
     },
     {
-      progress: 0.64,
-      camPos: new THREE.Vector3(44.0, 12.0, -155.0),
-      target: new THREE.Vector3(-10.0, 20.0, -172.0),
-      fov: 42,
+      progress: 0.81,
+      camPos: new THREE.Vector3(-36.0, 130.0, -288.0),
+      target: new THREE.Vector3(-2.0, 122.0, -342.0),
+      fov: 40,
     },
 
-    // --- STAGE 5: CAMERA ASCENDS FROM OCEAN (0.64 - 0.74) ---
-    // Ocean recedes below, atmospheric depth and horizon expand
+    // --- STAGE 7: PHASE C — AIRCRAFT ESTABLISHING SHOT (0.81 - 0.86) ---
+    // Hero 3/4 side-rear reveal showing complete silhouette: fuselage, wings, engines, and tail.
+    // Occupies ~60-66% of viewport width. 100% horizontal level flight. Zero clipping.
     {
-      progress: 0.69,
-      camPos: new THREE.Vector3(26.0, 38.0, -185.0),
-      target: new THREE.Vector3(-4.0, 14.0, -205.0),
-      fov: 46,
-    },
-    {
-      progress: 0.74,
-      camPos: new THREE.Vector3(12.0, 68.0, -215.0),
-      target: new THREE.Vector3(0.0, 45.0, -245.0),
-      fov: 48,
+      progress: 0.85,
+      camPos: new THREE.Vector3(-45.0, 136.5, -305.0),
+      target: new THREE.Vector3(1.5, 122.0, -358.0),
+      fov: 38,
     },
 
-    // --- STAGE 6: CLOUD TRANSITION (0.74 - 0.82) ---
-    // Soft flight through the atmospheric cloud stratum
+    // --- STAGE 8: SIDE-TRACKING CRUISE (0.86 - 0.94) ---
+    // Seamless lateral tracking shot alongside the cruising cargo plane in the stratosphere
     {
-      progress: 0.78,
-      camPos: new THREE.Vector3(4.0, 92.0, -240.0),
-      target: new THREE.Vector3(0.0, 94.0, -275.0),
-      fov: 50,
-    },
-    {
-      progress: 0.82,
-      camPos: new THREE.Vector3(-6.0, 112.0, -270.0),
-      target: new THREE.Vector3(0.0, 114.0, -305.0),
-      fov: 46,
-    },
-
-    // --- STAGE 7: CARGO PLANE (0.82 - 0.94) ---
-    // CRITICAL: Cinematic 3/4 tracking view (NOT from underneath!)
-    // Camera is to the side, slightly behind, slightly below: fuselage, wing, engine, tail fully visible
-    {
-      progress: 0.86,
-      camPos: new THREE.Vector3(-22.0, 114.0, -295.0),
-      target: new THREE.Vector3(1.5, 118.0, -330.0),
+      progress: 0.90,
+      camPos: new THREE.Vector3(-46.0, 137.0, -340.0),
+      target: new THREE.Vector3(2.0, 122.5, -396.0),
       fov: 38,
     },
     {
-      progress: 0.91,
-      camPos: new THREE.Vector3(-16.0, 116.5, -318.0),
-      target: new THREE.Vector3(2.0, 119.0, -345.0),
-      fov: 40,
+      progress: 0.94,
+      camPos: new THREE.Vector3(-42.0, 137.5, -382.0),
+      target: new THREE.Vector3(2.5, 123.0, -450.0),
+      fov: 39,
     },
 
-    // --- STAGE 8: FINAL MERIDIANO STATEMENT (0.94 - 1.00) ---
-    // Aircraft cruises into the distance, negative space opens up for statement
+    // --- STAGE 9: FINAL MERIDIANO STATEMENT & DEPARTURE (0.94 - 1.00) ---
+    // Aircraft accelerates smoothly into the horizon, becoming a graceful distant silhouette leaving clean negative space for typography
     {
-      progress: 0.96,
-      camPos: new THREE.Vector3(-4.0, 118.0, -342.0),
-      target: new THREE.Vector3(2.0, 120.0, -395.0),
-      fov: 42,
+      progress: 0.97,
+      camPos: new THREE.Vector3(-30.0, 138.0, -408.0),
+      target: new THREE.Vector3(3.5, 124.0, -520.0),
+      fov: 41,
     },
     {
       progress: 1.0,
-      camPos: new THREE.Vector3(0.0, 119.0, -355.0),
-      target: new THREE.Vector3(0.0, 121.0, -425.0),
-      fov: 44,
+      camPos: new THREE.Vector3(-18.0, 138.5, -420.0),
+      target: new THREE.Vector3(4.0, 125.0, -620.0),
+      fov: 43,
     },
   ];
 
@@ -270,20 +463,22 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
     const width = window.innerWidth;
     const height = window.innerHeight;
 
-    // A. Full-Screen Scene
+    // A. Full-Screen Scene with Realistic Daylight Atmosphere
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x060913); // Atmospheric midnight blue
-    scene.fog = new THREE.FogExp2(0x060913, 0.0032);
+    const daylightSkyColor = new THREE.Color(0xd2e0ed); // Soft daylight atmospheric sky
+    scene.background = daylightSkyColor;
+    scene.fog = new THREE.Fog(0xd2e0ed, 65, 460); // Atmospheric perspective & environmental haze towards horizon
+    scene.add(createSkyDome());
     sceneRef.current = scene;
 
-    // B. Camera - Near plane 0.2 prevents geometric clipping
-    const camera = new THREE.PerspectiveCamera(40, width / height, 0.2, 3500);
+    // B. Camera - Near plane 0.5 & Far plane 1400 maximizes 24-bit depth-buffer precision and eliminates z-fighting
+    const camera = new THREE.PerspectiveCamera(40, width / height, 0.5, 1400);
     const initialFrame = sampleTimeline(0);
     camera.position.copy(initialFrame.pos);
     camera.lookAt(initialFrame.target);
     cameraRef.current = camera;
 
-    // C. WebGL Renderer with High-Precision ACES Filmic Tone Mapping
+    // C. WebGL Renderer with High-Precision ACES Filmic Tone Mapping & Soft Shadows
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       antialias: true,
@@ -292,115 +487,255 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
     });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05; // Balanced exposure to prevent washed-out surfaces
+    renderer.toneMappingExposure = 1.0;
     rendererRef.current = renderer;
 
-    // D. Balanced Cinematic Lighting (Preserves PBR materials and contrast)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
+    // D. Soft Daylight Commercial Lighting (Preserves PBR materials, no blown-out whites, believable depth)
+    // Realistic skylight hemisphere: crisp daylight blue sky above, muted asphalt earth bounce below
+    const hemiLight = new THREE.HemisphereLight(0xe8f2fc, 0x505b69, 1.15);
+    scene.add(hemiLight);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfff7ed, 1.8);
-    sunLight.position.set(35, 60, 25);
+    // Soft Directional Sunlight (~50 degree elevation creates authentic vehicle & container form definition)
+    const sunLight = new THREE.DirectionalLight(0xfffaed, 2.15);
+    sunLight.position.set(45, 60, 32);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.camera.near = 5;
+    sunLight.shadow.camera.far = 180;
+    sunLight.shadow.camera.left = -40;
+    sunLight.shadow.camera.right = 40;
+    sunLight.shadow.camera.top = 40;
+    sunLight.shadow.camera.bottom = -40;
+    sunLight.shadow.bias = -0.0004;
+    sunLight.shadow.normalBias = 0.02;
     scene.add(sunLight);
 
-    const skyFill = new THREE.DirectionalLight(0x60a5fa, 0.85);
-    skyFill.position.set(-25, 30, -35);
+    // Subtle Sky Fill from opposite quadrant to soften shadows
+    const skyFill = new THREE.DirectionalLight(0x9cc3e6, 0.45);
+    skyFill.position.set(-35, 25, -25);
     scene.add(skyFill);
 
     // ========================================================================
-    // E. ENVIRONMENT 1: FACTORY STAGING BAY (Z: 10 to -10)
+    // E. CONTINUOUS INDUSTRIAL LAND LOGISTICS ENVIRONMENT
+    // Combines the Terminal Staging Apron & Asphalt Highway corridor seamlessly
     // ========================================================================
-    const factoryFloorGeo = new THREE.PlaneGeometry(60, 40);
-    const factoryFloorMat = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.85,
-      metalness: 0.15,
+    const landEnvGroup = new THREE.Group();
+
+    // 1. Concrete Staging Apron (Forklift & Container Yard, Z: +32 down to -2.0)
+    // Ends exactly where the road begins at Z = -2.0 (Zero coplanar overlap)
+    const apronGeo = new THREE.PlaneGeometry(68, 34);
+    const apronMat = new THREE.MeshStandardMaterial({
+      map: createConcreteApronTexture(),
+      roughness: 0.86,
+      metalness: 0.08,
     });
-    const factoryFloor = new THREE.Mesh(factoryFloorGeo, factoryFloorMat);
-    factoryFloor.rotation.x = -Math.PI / 2;
-    factoryFloor.position.set(0, 0, 2);
-    scene.add(factoryFloor);
+    const apronMesh = new THREE.Mesh(apronGeo, apronMat);
+    apronMesh.rotation.x = -Math.PI / 2;
+    apronMesh.position.set(0, 0, 15);
+    apronMesh.receiveShadow = true;
+    landEnvGroup.add(apronMesh);
 
-    // Factory Safety Guidance Lines
-    const lineGeo = new THREE.PlaneGeometry(40, 0.3);
-    const lineMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
-    const safetyLine = new THREE.Mesh(lineGeo, lineMat);
+    // 2. Concrete Apron Markings (Container Bay Staging Demarcation)
+    const amberLineMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      depthWrite: false,
+    });
+
+    // Container Bay Staging Pad Marking (Under 40ft container)
+    const bayBoxGeo = new THREE.PlaneGeometry(13.2, 3.4);
+    const bayBox = new THREE.Mesh(
+      bayBoxGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x334155,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+    );
+    bayBox.rotation.x = -Math.PI / 2;
+    bayBox.position.set(-1.2, 0.015, 0);
+    landEnvGroup.add(bayBox);
+
+    // Staging Safety Guidance Line
+    const safetyLine = new THREE.Mesh(new THREE.PlaneGeometry(44, 0.28), amberLineMat);
     safetyLine.rotation.x = -Math.PI / 2;
-    safetyLine.position.set(0, 0.015, 3.6);
-    scene.add(safetyLine);
+    safetyLine.position.set(0, 0.020, 3.8);
+    landEnvGroup.add(safetyLine);
 
-    // ========================================================================
-    // E. ENVIRONMENT 2: WIDE READABLE ASPHALT HIGHWAY (Z: -10 to -85)
-    // The truck must visibly sit ON a real road with curbs and expansive terrain
-    // ========================================================================
-    const roadGroup = new THREE.Group();
-
-    // 1. Wide Asphalt Highway (Width: 16m)
-    const roadGeo = new THREE.PlaneGeometry(16, 100);
+    // 3. High-Capacity Logistics Highway (Width: 15m, Begins cleanly at Z: -2.0 down to Z: -82.0)
+    const roadGeo = new THREE.PlaneGeometry(15, 80);
     const roadMat = new THREE.MeshStandardMaterial({
-      color: 0x181e28, // Deep authentic asphalt
-      roughness: 0.82,
-      metalness: 0.15,
+      map: createAsphaltTexture(),
+      bumpMap: createAsphaltBumpTexture(),
+      bumpScale: 0.015,
+      roughness: 0.80,
+      metalness: 0.12,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
     roadMesh.rotation.x = -Math.PI / 2;
-    roadMesh.position.set(0, 0, -35);
-    roadGroup.add(roadMesh);
+    roadMesh.position.set(0, 0, -42.0);
+    roadMesh.receiveShadow = true;
+    landEnvGroup.add(roadMesh);
 
-    // 2. Concrete Road Shoulders / Curbs (Left & Right)
+    // 4. Concrete Road Edge Curbs (Left & Right, Length: 80m)
     const curbMat = new THREE.MeshStandardMaterial({
-      color: 0x334155,
-      roughness: 0.88,
+      color: 0x5a6575,
+      roughness: 0.84,
     });
-    const curbL = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 100), curbMat);
-    curbL.rotation.x = -Math.PI / 2;
-    curbL.position.set(-8.8, 0.02, -35);
-    roadGroup.add(curbL);
+    const curbGeo = new THREE.BoxGeometry(0.7, 0.08, 80);
+    const curbL = new THREE.Mesh(curbGeo, curbMat);
+    curbL.position.set(-7.85, 0.04, -42.0);
+    curbL.receiveShadow = true;
+    curbL.castShadow = true;
+    landEnvGroup.add(curbL);
 
-    const curbR = curbL.clone();
-    curbR.position.x = 8.8;
-    roadGroup.add(curbR);
+    const curbR = new THREE.Mesh(curbGeo, curbMat);
+    curbR.position.set(7.85, 0.04, -42.0);
+    curbR.receiveShadow = true;
+    curbR.castShadow = true;
+    landEnvGroup.add(curbR);
 
-    // 3. Solid White Shoulder Lines
-    const whiteLineMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0 });
-    const shoulderLineL = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 100), whiteLineMat);
-    shoulderLineL.rotation.x = -Math.PI / 2;
-    shoulderLineL.position.set(-6.5, 0.03, -35);
-    roadGroup.add(shoulderLineL);
+    // 5. Stabilized Gravel Shoulders (Left & Right, Length: 80m)
+    const shoulderMat = new THREE.MeshStandardMaterial({
+      color: 0x3d4550,
+      roughness: 0.95,
+    });
+    const shoulderGeo = new THREE.PlaneGeometry(3.6, 80);
+    const shoulderL = new THREE.Mesh(shoulderGeo, shoulderMat);
+    shoulderL.rotation.x = -Math.PI / 2;
+    shoulderL.position.set(-10.0, 0.005, -42.0);
+    shoulderL.receiveShadow = true;
+    landEnvGroup.add(shoulderL);
 
-    const shoulderLineR = shoulderLineL.clone();
-    shoulderLineR.position.x = 6.5;
-    roadGroup.add(shoulderLineR);
+    const shoulderR = new THREE.Mesh(shoulderGeo, shoulderMat);
+    shoulderR.rotation.x = -Math.PI / 2;
+    shoulderR.position.set(10.0, 0.005, -42.0);
+    shoulderR.receiveShadow = true;
+    landEnvGroup.add(shoulderR);
 
-    // 4. Subtle Dashed Center Line
-    for (let z = 12; z >= -82; z -= 6.5) {
-      const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 3.4), whiteLineMat);
+    // 6. Restrained Road Markings (Solid White Edge Lines & Dashed Center Divider)
+    const whiteMarkMat = new THREE.MeshBasicMaterial({
+      color: 0xf8fafc,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      depthWrite: false,
+    });
+    const edgeLineGeo = new THREE.PlaneGeometry(0.22, 80);
+    const edgeLineL = new THREE.Mesh(edgeLineGeo, whiteMarkMat);
+    edgeLineL.rotation.x = -Math.PI / 2;
+    edgeLineL.position.set(-6.5, 0.02, -42.0);
+    landEnvGroup.add(edgeLineL);
+
+    const edgeLineR = edgeLineL.clone();
+    edgeLineR.position.x = 6.5;
+    landEnvGroup.add(edgeLineR);
+
+    // Center Dashed Dividing Line (4.5m dash, 7.5m gap, Y = 0.025)
+    for (let z = -2.0; z >= -80.0; z -= 12.0) {
+      const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 4.5), whiteMarkMat);
       dash.rotation.x = -Math.PI / 2;
-      dash.position.set(0, 0.035, z);
-      roadGroup.add(dash);
+      dash.position.set(0, 0.025, z - 2.25);
+      landEnvGroup.add(dash);
     }
 
-    // 5. Vast Surrounding Terrain (Expands 450m so road is in a real environment)
-    const terrainGeo = new THREE.PlaneGeometry(450, 180);
+    // 7. Roadside Guide Delineator Posts (Spaced every 20m)
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+    const reflectorMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    for (let z = 0.0; z >= -80.0; z -= 20.0) {
+      [-8.4, 8.4].forEach((xPos) => {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.85, 8), postMat);
+        post.position.set(xPos, 0.425, z);
+        post.castShadow = true;
+        landEnvGroup.add(post);
+
+        const ref = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.043, 0.12, 8), reflectorMat);
+        ref.position.set(xPos, 0.72, z);
+        landEnvGroup.add(ref);
+      });
+    }
+
+    // 8. Terminal Scale Reference Masts (Slender modern high-mast floodlight towers)
+    const mastMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      metalness: 0.65,
+      roughness: 0.40,
+    });
+    const mastLightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const mastPositions = [
+      [-28, 18],
+      [28, 18],
+      [-28, -10],
+      [28, -10],
+    ];
+    mastPositions.forEach(([mX, mZ]) => {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.24, 19, 12), mastMat);
+      pole.position.set(mX, 9.5, mZ);
+      pole.castShadow = true;
+      landEnvGroup.add(pole);
+
+      // Crossbar & fixtures
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.15, 0.25), mastMat);
+      bar.position.set(mX, 19, mZ);
+      bar.castShadow = true;
+      landEnvGroup.add(bar);
+
+      const fixture = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.08, 0.15), mastLightMat);
+      fixture.position.set(mX, 18.9, mZ);
+      landEnvGroup.add(fixture);
+    });
+
+    // 9. Surrounding Industrial Terrain Ground (Placed at Y = -0.30 to avoid any depth precision artifacts)
+    const terrainGeo = new THREE.PlaneGeometry(600, 200);
     const terrainMat = new THREE.MeshStandardMaterial({
-      color: 0x080c14,
+      color: 0x242c38,
       roughness: 0.95,
-      metalness: 0.05,
     });
     const terrain = new THREE.Mesh(terrainGeo, terrainMat);
     terrain.rotation.x = -Math.PI / 2;
-    terrain.position.set(0, -0.05, -35);
-    roadGroup.add(terrain);
+    terrain.position.set(0, -0.3, -25);
+    terrain.receiveShadow = true;
+    landEnvGroup.add(terrain);
 
-    scene.add(roadGroup);
-    modelsRef.current.roadGroup = roadGroup;
+    // 10. Distant Horizon Ridges (Atmospheric perspective silhouettes)
+    const horizonGroup = new THREE.Group();
+    const ridgeMat = new THREE.MeshStandardMaterial({
+      color: 0x8a9cae,
+      roughness: 0.95,
+      flatShading: true,
+    });
+    for (let r = 0; r < 7; r++) {
+      const ridge = new THREE.Mesh(
+        new THREE.ConeGeometry(75 + r * 15, 24 + (r % 3) * 6, 6),
+        ridgeMat
+      );
+      ridge.position.set((r - 3) * 95 + (r % 2) * 20, 0, -310 - (r % 3) * 35);
+      ridge.scale.set(1.6, 1.0, 0.4);
+      horizonGroup.add(ridge);
+    }
+    landEnvGroup.add(horizonGroup);
+
+    scene.add(landEnvGroup);
+    modelsRef.current.roadGroup = landEnvGroup;
 
     // ========================================================================
-    // E. ENVIRONMENT 3: VAST OCEAN WATER SURFACE (Z: -80 to -300)
-    // Sits large enough to reach the horizon (1500m x 1500m)
+    // E. ENVIRONMENT 3: VAST OCEAN WATER SURFACE (Z: -82 to -802)
+    // Sits ONLY in the maritime region — zero overlap with land road/apron
     // ========================================================================
-    const oceanGeo = new THREE.PlaneGeometry(1500, 1500, 48, 48);
+    const oceanGeo = new THREE.PlaneGeometry(1200, 720, 32, 32);
     const oceanMat = new THREE.MeshStandardMaterial({
       color: 0x04182b, // Deep oceanic navy
       roughness: 0.2,
@@ -409,32 +744,17 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
     });
     const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
     oceanMesh.rotation.x = -Math.PI / 2;
-    oceanMesh.position.set(0, 0, -180);
+    oceanMesh.position.set(0, -0.2, -442.0);
     scene.add(oceanMesh);
     modelsRef.current.oceanMesh = oceanMesh;
 
     // ========================================================================
-    // E. ENVIRONMENT 4: PROCEDURAL CLOUD LAYER (Y: 85 to 110, Z: -220 to -380)
+    // E. ENVIRONMENT 4: LIGHTWEIGHT ATMOSPHERIC TRANSITION LAYER
+    // Solid polyhedra removed to guarantee a completely clear, unobstructed camera path.
+    // Atmospheric transition is driven smoothly via dynamic distance fog and background color blending.
     // ========================================================================
     const cloudsGroup = new THREE.Group();
-    const cloudMat = new THREE.MeshStandardMaterial({
-      color: 0x243247,
-      roughness: 0.95,
-      transparent: true,
-      opacity: 0.6,
-    });
-
-    for (let c = 0; c < 50; c++) {
-      const radius = 10 + Math.random() * 16;
-      const puff = new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 1), cloudMat);
-      puff.position.set(
-        (Math.random() - 0.5) * 220,
-        90 + (Math.random() - 0.5) * 18,
-        -220 - Math.random() * 150
-      );
-      puff.scale.set(1.9, 0.45, 1.4);
-      cloudsGroup.add(puff);
-    }
+    cloudsGroup.name = 'AtmosphericLayer';
     scene.add(cloudsGroup);
     modelsRef.current.cloudsGroup = cloudsGroup;
 
@@ -474,61 +794,33 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
       });
     };
 
-    // Helper: Material application for dark steel container chassis
-    const applyChassisDarkSteelMaterial = (group: THREE.Group) => {
-      group.traverse((c) => {
-        if ((c as THREE.Mesh).isMesh) {
-          const mesh = c as THREE.Mesh;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          mesh.material = new THREE.MeshStandardMaterial({
-            color: 0x1f242d, // Dark graphite / industrial steel
-            roughness: 0.38,
-            metalness: 0.65,
-            side: THREE.DoubleSide,
-          });
-        }
-      });
-    };
-
-    // Helper: Ensure truck finishes are premium dark graphite without blown-out whites
-    const tuneTruckMaterials = (group: THREE.Group) => {
-      group.traverse((c) => {
-        if ((c as THREE.Mesh).isMesh) {
-          const mesh = c as THREE.Mesh;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          if (Array.isArray(mesh.material)) {
-            mesh.material.forEach((m) => { m.side = THREE.DoubleSide; });
-          } else if (mesh.material) {
-            mesh.material.side = THREE.DoubleSide;
-          }
-        }
-      });
-    };
-
     // ------------------------------------------------------------------------
     // 1. FORKLIFT MODEL (Stage 1: Factory Staging Bay)
+    // Locked calibrated configuration from forkliftConfig.ts
     // ------------------------------------------------------------------------
     console.log('LOADING FORKLIFT');
     loadGLTF(loader, getModelUrl('forklift.glb'))
       .then((raw) => {
+        raw.traverse((c) => {
+          if ((c as THREE.Mesh).isMesh) {
+            c.castShadow = true;
+            c.receiveShadow = true;
+          }
+        });
+
         const box = new THREE.Box3().setFromObject(raw);
         const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
 
         // Center X & Z, ground wheels on Y = 0
         raw.position.set(-center.x, -box.min.y, -center.z);
 
         const forkGroup = new THREE.Group();
+        forkGroup.name = 'Forklift';
         forkGroup.add(raw);
-        // Realistic ~3.8m length
-        const scale = 3.8 / Math.max(size.x, size.y, size.z);
-        forkGroup.scale.setScalar(scale);
+        forkGroup.scale.setScalar(FORKLIFT_CONFIG.scale);
+        forkGroup.position.set(...FORKLIFT_CONFIG.position);
+        forkGroup.rotation.set(...FORKLIFT_CONFIG.rotation);
 
-        // Position on factory dock facing container
-        forkGroup.position.set(1.5, 0, 1.8);
-        forkGroup.rotation.y = -Math.PI / 2 + 0.35;
         scene.add(forkGroup);
         modelsRef.current.forklift = forkGroup;
         console.log('FORKLIFT LOADED');
@@ -560,6 +852,18 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
         const sHei = 2.60 / size.y;
         contGroup.scale.set(sLen, sHei, sWid);
 
+        // Soft ambient occlusion contact shadow underneath container footprint
+        const contShadowMat = new THREE.MeshBasicMaterial({
+          map: createContactShadowTexture('rect'),
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+        });
+        const contShadow = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 13.0), contShadowMat);
+        contShadow.rotation.x = -Math.PI / 2;
+        contShadow.position.set(0, 0.005, 0);
+        contGroup.add(contShadow);
+
         // Position on factory floor
         contGroup.position.set(-1.2, 0, 0);
         contGroup.rotation.y = Math.PI / 2; // Length along Z
@@ -576,6 +880,7 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
 
     // ------------------------------------------------------------------------
     // 3. BELIEVABLE TRUCK ASSEMBLY (Tractor + Chassis + Container as ONE GROUP)
+    // Strictly uses buildApprovedTruckAssembly from truckAssemblyConfig.ts
     // ------------------------------------------------------------------------
     Promise.all([
       loadGLTF(loader, getModelUrl('truck.glb')),
@@ -583,82 +888,17 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
       loadGLTF(loader, getModelUrl('container.glb')),
     ])
       .then(([rawTruck, rawChassis, rawCont]) => {
-        const truckAssembly = new THREE.Group();
-        truckAssembly.name = 'TruckAssembly';
+        // Build the approved TruckAssembly using the locked calibration
+        const truckAssembly = buildApprovedTruckAssembly(rawTruck, rawChassis, rawCont);
 
-        // A. Tractor Cab
-        const tBox = new THREE.Box3().setFromObject(rawTruck);
-        const tCenter = tBox.getCenter(new THREE.Vector3());
-        // Align center X=0, ground wheels at Y=0
-        rawTruck.position.set(-tCenter.x, -tBox.min.y, 0);
-
-        const truckSub = new THREE.Group();
-        truckSub.add(rawTruck);
-        // Real-world scale factor 0.1212 gives MAN TGX exact 2.55m width, 3.17m height, 4.65m length
-        truckSub.scale.setScalar(0.1212);
-        tuneTruckMaterials(truckSub);
-        truckAssembly.add(truckSub);
-
-        // Headlight Beams (soft road illumination)
-        const beamGeo = new THREE.ConeGeometry(1.2, 10, 16);
-        const beamMat = new THREE.MeshBasicMaterial({
-          color: 0x93c5fd,
-          transparent: true,
-          opacity: 0.12,
-        });
-        const beamL = new THREE.Mesh(beamGeo, beamMat);
-        beamL.rotation.x = Math.PI / 2;
-        beamL.position.set(-0.85, 0.85, 7.5);
-        truckAssembly.add(beamL);
-
-        const beamR = beamL.clone();
-        beamR.position.x = 0.85;
-        truckAssembly.add(beamR);
-
-        // B. Separate Chassis Trailer
-        const chBox = new THREE.Box3().setFromObject(rawChassis);
-        const chCenter = chBox.getCenter(new THREE.Vector3());
-        // Center width Z=0, ground wheels at Y=0
-        rawChassis.position.set(0, -chBox.min.y, -chCenter.z);
-
-        const chassisSub = new THREE.Group();
-        chassisSub.add(rawChassis);
-        // Rotate so chassis length is along Z, front kingpin towards +Z
-        chassisSub.rotation.y = Math.PI / 2;
-        // Connect fifth-wheel kingpin directly behind tractor at Z = -2.38m
-        chassisSub.position.set(0, 0, -2.38);
-        applyChassisDarkSteelMaterial(chassisSub);
-        truckAssembly.add(chassisSub);
-
-        // C. Shipping Container (Seated directly on chassis deck)
-        const cBox = new THREE.Box3().setFromObject(rawCont);
-        const cCenter = cBox.getCenter(new THREE.Vector3());
-        const cSize = cBox.getSize(new THREE.Vector3());
-        // Center on X & Z, base at Y=0
-        rawCont.position.set(-cCenter.x, -cBox.min.y, -cCenter.z);
-
-        const contSub = new THREE.Group();
-        contSub.add(rawCont);
-        // Rotate so length is along Z
-        contSub.rotation.y = Math.PI / 2;
-        // Exact 40ft container dimensions: length 12.0m, width 2.44m, height 2.60m
-        const sLen = 12.0 / cSize.x;
-        const sWid = 2.44 / cSize.z;
-        const sHei = 2.60 / cSize.y;
-        contSub.scale.set(sLen, sHei, sWid);
-
-        // Chassis deck top is at Y = 1.559m above road. Container sits flush on chassis bed.
-        // Trailer extends Z: -1.2m to -13.67m -> center Z = -7.43m
-        contSub.position.set(0, 1.559, -7.43);
-        applyContainerNavyMaterial(contSub);
-        truckAssembly.add(contSub);
-
-        // Position the assembled vehicle on the highway at Z = -28.0m
+        // Orient to face forward down the highway (-Z)
+        truckAssembly.rotation.y = -Math.PI / 2;
         truckAssembly.position.set(0, 0, -28.0);
+
         scene.add(truckAssembly);
         modelsRef.current.truckAssembly = truckAssembly;
 
-        console.log('TRUCK ASSEMBLY BUILT: One cohesive group on road');
+        console.log('TRUCK ASSEMBLY BUILT: Locked approved calibration on road');
         onModelLoaded('Truck');
         onModelLoaded('Chassis');
         onModelLoaded('Highway Container');
@@ -675,39 +915,6 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
     // ------------------------------------------------------------------------
     loadGLTF(loader, getModelUrl('container-ship.glb'))
       .then((raw) => {
-        const box = new THREE.Box3().setFromObject(raw);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-
-        // Center on all axes
-        raw.position.set(-center.x, -box.min.y, -center.z);
-
-        const shipGroup = new THREE.Group();
-        shipGroup.add(raw);
-
-        // Realistic mega ship scale: ~175m length
-        const scale = 175.0 / size.x;
-        shipGroup.scale.setScalar(scale);
-
-        // Sits VISIBLY IN THE OCEAN: keel submerged, waterline at Y = 0
-        shipGroup.position.set(-10.0, -3.2, -145.0);
-        shipGroup.rotation.y = Math.PI / 2 + 0.12;
-
-        scene.add(shipGroup);
-        modelsRef.current.shipGroup = shipGroup;
-        onModelLoaded('Container Ship');
-      })
-      .catch((e) => {
-        console.error('Ship error:', e);
-        onModelLoaded('Container Ship (fallback error)');
-      });
-
-    // ------------------------------------------------------------------------
-    // 5. CARGO PLANE (Stage 7: Stratospheric Reach)
-    // ------------------------------------------------------------------------
-    loadGLTF(loader, getModelUrl('cargo-plane.glb'))
-      .then((raw) => {
-        // Double-side all meshes so no CAD backface becomes invisible
         raw.traverse((c) => {
           if ((c as THREE.Mesh).isMesh) {
             const mesh = c as THREE.Mesh;
@@ -725,24 +932,44 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
 
-        // Center on all 3 axes
-        raw.position.set(-center.x, -center.y, -center.z);
+        // Center on all axes, waterline at Y = 0
+        raw.position.set(-center.x, -box.min.y, -center.z);
 
-        const planeGroup = new THREE.Group();
-        planeGroup.add(raw);
+        const shipGroup = new THREE.Group();
+        shipGroup.name = 'ContainerShip';
+        shipGroup.add(raw);
 
-        // Authentic wingspan ~65m
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const scale = 65.0 / maxDim;
-        planeGroup.scale.setScalar(scale);
+        // Authentic container vessel scale: 175m length (longest dimension)
+        const shipLength = Math.max(size.x, size.y, size.z);
+        const scale = 175.0 / shipLength;
+        shipGroup.scale.setScalar(scale);
 
-        // Rotate CAD Z-Up to Three.js Y-Up, and orient along flight direction
-        planeGroup.rotation.set(-Math.PI / 2, 0, -Math.PI / 2 + 0.12);
+        // Sits safely in the open ocean at Z = -195.0, waterline submerged to Y = -3.2 (zero highway overlap)
+        shipGroup.position.set(-15.0, -3.2, -195.0);
+        shipGroup.rotation.y = Math.PI / 2;
 
-        // Position in high altitude sky
-        planeGroup.position.set(0, 118.0, -325.0);
-        scene.add(planeGroup);
-        modelsRef.current.planeGroup = planeGroup;
+        scene.add(shipGroup);
+        modelsRef.current.shipGroup = shipGroup;
+        onModelLoaded('Container Ship');
+      })
+      .catch((e) => {
+        console.error('Ship error:', e);
+        onModelLoaded('Container Ship (fallback error)');
+      });
+
+    // ------------------------------------------------------------------------
+    // 5. CARGO PLANE (Stage 7: Stratospheric Reach)
+    // Strictly uses calibrated hierarchy: AircraftRig → OrientationCorrection → RawCargoPlane
+    // ------------------------------------------------------------------------
+    loadGLTF(loader, getModelUrl('cargo-plane.glb'))
+      .then((raw) => {
+        // Build the calibrated aircraft conforming strictly to:
+        // AircraftRig → OrientationCorrection → RawCargoPlane
+        const { rig, orientationCorrection } = buildCalibratedAircraftRig(raw, APPROVED_AIRCRAFT_CONFIG);
+
+        scene.add(rig);
+        modelsRef.current.aircraftRig = rig;
+        modelsRef.current.planeGroup = orientationCorrection;
         onModelLoaded('Cargo Plane');
       })
       .catch((e) => {
@@ -771,36 +998,106 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
         }
       }
 
-      // 2. Physical Dynamic Movements along Timeline
+      // 2. Dynamic Atmospheric Distance Fog & Color Blending (Phases A, B, C)
+      if (sceneRef.current && sceneRef.current.fog instanceof THREE.Fog) {
+        const fog = sceneRef.current.fog;
+        const daylightSky = new THREE.Color(0xd2e0ed);
+        const transitionHaze = new THREE.Color(0xdce6f0);
+        const stratosphericSky = new THREE.Color(0xb2cae0);
 
-      // Stage 1 (0.00 -> 0.14): Forklift hoists / lowers container at staging line
+        if (p < 0.64) {
+          // Low-altitude ground and maritime staging
+          fog.near = 65;
+          fog.far = 460;
+          fog.color.copy(daylightSky);
+          sceneRef.current.background = daylightSky;
+        } else if (p < 0.81) {
+          // Phase A & B: Smooth atmospheric transition (gentle haze layer softening lower horizon)
+          const t = (p - 0.64) / 0.17;
+          const hazeFactor = Math.sin(t * Math.PI);
+          fog.near = THREE.MathUtils.lerp(65, 42, hazeFactor);
+          fog.far = THREE.MathUtils.lerp(460, 310, hazeFactor);
+          const hazeColor = new THREE.Color().lerpColors(daylightSky, transitionHaze, hazeFactor);
+          fog.color.copy(hazeColor);
+          sceneRef.current.background = hazeColor;
+        } else {
+          // Phase C & stratospheric cruise: expansive, crisp high-altitude clarity
+          const t = Math.min((p - 0.81) / 0.19, 1.0);
+          fog.near = THREE.MathUtils.lerp(65, 85, t);
+          fog.far = THREE.MathUtils.lerp(460, 650, t);
+          const skyColor = new THREE.Color().lerpColors(transitionHaze, stratosphericSky, t);
+          fog.color.copy(skyColor);
+          sceneRef.current.background = skyColor;
+        }
+      }
+
+      // 3. Physical Dynamic Movements along Timeline
+
+      // Stage 1 (0.00 -> 0.14): Forklift hoists / approaches container at staging line
       if (modelsRef.current.forklift) {
         const forkP = Math.min(p / 0.14, 1.0);
-        modelsRef.current.forklift.position.z = 1.8 - forkP * 0.6;
+        modelsRef.current.forklift.position.z = FORKLIFT_CONFIG.position[2] - forkP * 0.4;
       }
 
-      // Stage 3 (0.24 -> 0.44): TruckAssembly drives forward down the highway AS ONE GROUP
+      // Stage 3 (0.24 -> 0.48): TruckAssembly drives forward down the highway AS ONE GROUP with rolling wheels
       if (modelsRef.current.truckAssembly) {
-        if (p >= 0.24 && p <= 0.46) {
-          const truckT = (p - 0.24) / 0.20;
-          modelsRef.current.truckAssembly.position.z = -28.0 - truckT * 26.0;
+        if (p >= 0.24 && p <= 0.48) {
+          const truckT = Math.min(Math.max((p - 0.24) / 0.20, 0), 1.2);
+          const distanceTravelled = truckT * 26.0;
+          modelsRef.current.truckAssembly.position.z = -28.0 - distanceTravelled;
+          modelsRef.current.truckAssembly.userData.setWheelSpin?.(distanceTravelled);
+        } else if (p < 0.24) {
+          modelsRef.current.truckAssembly.position.z = -28.0;
+          modelsRef.current.truckAssembly.userData.setWheelSpin?.(0);
         }
       }
 
-      // Stage 4 (0.44 -> 0.64): Ship gentle ocean swell
+      // Stage 4 (0.44 -> 0.68): Ship gentle ocean swell cutting through waves
       if (modelsRef.current.shipGroup) {
-        modelsRef.current.shipGroup.rotation.z = Math.sin(p * 24.0) * 0.012;
+        modelsRef.current.shipGroup.rotation.z = Math.sin(p * 20.0) * 0.012;
       }
 
-      // Stage 7 (0.82 -> 1.00): Cargo plane cruises smoothly through the stratosphere
-      if (modelsRef.current.planeGroup) {
-        if (p >= 0.82) {
-          const planeT = (p - 0.82) / 0.18;
-          modelsRef.current.planeGroup.position.z = -325.0 - planeT * 85.0;
-          modelsRef.current.planeGroup.position.x = 2.0 + Math.sin(planeT * Math.PI) * 8.0;
-          modelsRef.current.planeGroup.rotation.z = -Math.sin(planeT * Math.PI) * 0.09;
+      // Stage 7 (0.78 -> 1.00): Cargo plane cruises horizontally through the stratosphere
+      // Animation strictly modifies ONLY AircraftRig parent group (position & subtle bank),
+      // completely preserving OrientationCorrection locked permanent calibration transforms.
+      if (modelsRef.current.aircraftRig) {
+        if (p >= 0.78) {
+          const planeT = Math.max(0, Math.min(1, (p - 0.78) / 0.22));
+
+          // Forward flight: cruises steadily from 0.78 to 0.92, then accelerates into the distance from 0.92 to 1.00
+          let forwardDisplacement = 0;
+          if (planeT < 0.60) {
+            // Cruise phase: steady travel along flight path
+            const cruiseT = planeT / 0.60;
+            forwardDisplacement = cruiseT * 60.0;
+          } else {
+            // Acceleration phase: aircraft accelerates forward and away into the horizon
+            const accelT = (planeT - 0.60) / 0.40;
+            forwardDisplacement = 60.0 + accelT * 120.0 + accelT * accelT * 140.0;
+          }
+
+          modelsRef.current.aircraftRig.position.z = APPROVED_AIRCRAFT_CONFIG.rig.position[2] - forwardDisplacement;
+
+          // Subtle horizontal drift and altitude climb during departure
+          modelsRef.current.aircraftRig.position.x = Math.sin(planeT * Math.PI) * 2.5;
+          modelsRef.current.aircraftRig.position.y = APPROVED_AIRCRAFT_CONFIG.rig.position[1] + Math.pow(planeT, 2) * 4.0;
+
+          // Very subtle banking motion (max ±0.025 rad ≈ 1.4°), returning to perfectly level
+          // Applied ONLY to AircraftRig parent group, NEVER touching OrientationCorrection
+          modelsRef.current.aircraftRig.rotation.z = -Math.sin(planeT * Math.PI * 1.5) * 0.025;
+        } else {
+          // Reset to initial baseline position when scrolled before flight sequence
+          modelsRef.current.aircraftRig.position.set(...APPROVED_AIRCRAFT_CONFIG.rig.position);
+          modelsRef.current.aircraftRig.rotation.set(0, 0, 0);
         }
       }
+
+      // 3. Global Model Visibility Management: guarantees zero camera clipping or collision across transitions
+      if (modelsRef.current.forklift) modelsRef.current.forklift.visible = p < 0.26;
+      if (modelsRef.current.containerStage1) modelsRef.current.containerStage1.visible = p < 0.26;
+      if (modelsRef.current.truckAssembly) modelsRef.current.truckAssembly.visible = p >= 0.20 && p <= 0.52;
+      if (modelsRef.current.shipGroup) modelsRef.current.shipGroup.visible = p >= 0.42 && p <= 0.80;
+      if (modelsRef.current.aircraftRig) modelsRef.current.aircraftRig.visible = p >= 0.76;
 
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -865,7 +1162,7 @@ export const CinematicScrollExperience: React.FC<CinematicScrollExperienceProps>
   };
 
   return (
-    <div className="relative w-full bg-[#060913] text-white overflow-x-hidden selection:bg-blue-600 selection:text-white">
+    <div className="relative w-full bg-transparent text-white overflow-x-hidden selection:bg-blue-600 selection:text-white">
       
       {/* ==================================================================== */}
       {/* 1. PERMANENT FULL-SCREEN FIXED WEBGL CANVAS (EDGE-TO-EDGE)            */}
