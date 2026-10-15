@@ -76,7 +76,7 @@ export function buildApprovedTruckAssembly(
   const wheelNodes: THREE.Object3D[] = [];
   rawTruck.traverse((child) => {
     // Identify wheel axle assemblies (Object_3 = rear tandem, Object_3.001 = front right, Object_3.002 = front left)
-    if (child.name === 'Object_3' || child.name === 'Object_3.001' || child.name === 'Object_3.002') {
+    if (['object3','object3001','object3002'].includes(child.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase())) {
       wheelNodes.push(child);
       // Neutralize front steering: reset Z steering angle from -45 deg to 0 so wheels point straight forward
       child.rotation.set(-Math.PI / 2, 0, 0, 'XYZ');
@@ -86,17 +86,34 @@ export function buildApprovedTruckAssembly(
       const m = child as THREE.Mesh;
       m.castShadow = true;
       m.receiveShadow = true;
-      if (Array.isArray(m.material)) {
-        m.material.forEach((mat) => {
-          if ('color' in mat && !mat.name?.includes('Light') && !mat.name?.includes('Glass')) {
-            (mat as THREE.MeshStandardMaterial).color.set(0x22262d);
-            (mat as THREE.MeshStandardMaterial).roughness = 0.45;
-          }
-          mat.side = THREE.DoubleSide;
-        });
-      } else if (m.material) {
-        m.material.side = THREE.DoubleSide;
-      }
+      // Apply one coherent palette to every truck material, whether the
+      // original mesh has a single material or a material array. Preserve
+      // glass, lights, wheels and metallic trim rather than painting them navy.
+      const repaint = (original: THREE.Material): THREE.Material => {
+        const mat = original.clone();
+        mat.side = THREE.DoubleSide;
+        if (!(mat instanceof THREE.MeshStandardMaterial)) return mat;
+        const name = (mat.name || '').toLowerCase();
+        if (/glass|light|loght|tyre|tire|rim|hub|wheel/.test(name)) return mat;
+        if (/metalic|metallic/.test(name)) {
+          mat.color.set(0x929da5);
+          mat.metalness = 0.72;
+          mat.roughness = 0.36;
+        } else if (/dark|material/.test(name)) {
+          mat.color.set(0x202832);
+          mat.metalness = 0.3;
+          mat.roughness = 0.57;
+        } else {
+          // Previously mismatched 'Grey' and 'Back_Trailor' panels.
+          mat.color.set(0x24475f);
+          mat.metalness = 0.24;
+          mat.roughness = 0.53;
+        }
+        return mat;
+      };
+      m.material = Array.isArray(m.material)
+        ? m.material.map(repaint)
+        : repaint(m.material);
     }
   });
 
@@ -111,9 +128,9 @@ export function buildApprovedTruckAssembly(
   truckAssembly.userData.wheelNodes = wheelNodes;
   truckAssembly.userData.setWheelSpin = (distanceTravelled: number) => {
     const wheelRadius = 0.57; // meters
-    const spinAngle = -(distanceTravelled / wheelRadius);
+    const spinAngle = distanceTravelled / wheelRadius;
     wheelNodes.forEach((wheel) => {
-      // Rotate around local axle (X axis) preserving neutral straight steering
+      // Rotate around local axle (X axis) preserving neutral straight steering (Y=0, Z=0)
       wheel.rotation.set(-Math.PI / 2 + spinAngle, 0, 0, 'XYZ');
     });
   };
