@@ -6,7 +6,7 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ArrowDown, Volume2, VolumeX, Globe, AlertCircle, RotateCcw } from 'lucide-react';
 import { audioEngine } from '../logistics3d/audioEngine';
 import { getModelUrl } from '../../utils/modelUrl';
-import { buildApprovedTruckAssembly, APPROVED_TRUCK_ASSEMBLY_CONFIG } from './truckAssemblyConfig';
+import { buildApprovedTruckAssembly, attachMeridianoWordmark, APPROVED_TRUCK_ASSEMBLY_CONFIG } from './truckAssemblyConfig';
 import { FORKLIFT_CONFIG } from './forkliftConfig';
 import { buildCalibratedAircraftRig, APPROVED_AIRCRAFT_CONFIG } from './aircraftConfig';
 import { buildContainerHandlerRig, ContainerHandlerRig } from './containerHandlerRig';
@@ -149,26 +149,26 @@ const MASTER_KEYFRAMES: Keyframe[] = [
   // Zero occlusion, zero cutting inside container, completely clear view of approach, lift, and placement
   {
     progress: 0.00,
-    camPos: new THREE.Vector3(9.0, 11.25, 19.525),
-    target: new THREE.Vector3(3.2, 1.8, 4.0),
+    camPos: new THREE.Vector3(17.0, 12.5, 23.0),
+    target: new THREE.Vector3(3.0, 1.8, 2.0),
     fov: 42,
   },
   {
     progress: 0.05,
-    camPos: new THREE.Vector3(9.0, 11.25, 19.525),
-    target: new THREE.Vector3(3.2, 1.8, 4.0),
+    camPos: new THREE.Vector3(17.0, 12.5, 23.0),
+    target: new THREE.Vector3(3.0, 1.8, 2.0),
     fov: 42,
   },
   {
     progress: 0.10,
-    camPos: new THREE.Vector3(9.0, 11.25, 19.525),
-    target: new THREE.Vector3(3.2, 1.8, 4.0),
+    camPos: new THREE.Vector3(17.0, 12.5, 23.0),
+    target: new THREE.Vector3(3.0, 1.8, 2.0),
     fov: 42,
   },
   {
     progress: 0.16,
-    camPos: new THREE.Vector3(9.0, 11.25, 19.525),
-    target: new THREE.Vector3(3.2, 1.8, 4.0),
+    camPos: new THREE.Vector3(17.0, 12.5, 23.0),
+    target: new THREE.Vector3(3.0, 1.8, 2.0),
     fov: 42,
   },
 
@@ -176,19 +176,19 @@ const MASTER_KEYFRAMES: Keyframe[] = [
   // Truck drives straight forward toward screen-right; cab leads movement
   {
     progress: 0.22,
-    camPos: new THREE.Vector3(9.5, 5.2, 8.0),
+    camPos: new THREE.Vector3(20.0, 9.0, 13.0),
     target: new THREE.Vector3(0.0, 1.8, -12.0),
     fov: 38,
   },
   {
     progress: 0.29,
-    camPos: new THREE.Vector3(10.0, 4.6, -15.0),
+    camPos: new THREE.Vector3(19.0, 7.0, -15.0),
     target: new THREE.Vector3(0.0, 1.8, -35.0),
     fov: 38,
   },
   {
     progress: 0.36,
-    camPos: new THREE.Vector3(10.5, 4.2, -38.0),
+    camPos: new THREE.Vector3(18.0, 6.0, -38.0),
     target: new THREE.Vector3(0.0, 1.8, -58.0),
     fov: 38,
   },
@@ -198,7 +198,7 @@ const MASTER_KEYFRAMES: Keyframe[] = [
   // Container stacks serve as cinematic foreground transition wipe to ship
   {
     progress: 0.42,
-    camPos: new THREE.Vector3(11.0, 4.8, -58.0),
+    camPos: new THREE.Vector3(17.0, 6.0, -58.0),
     target: new THREE.Vector3(0.0, 2.0, -78.0),
     fov: 40,
   },
@@ -670,6 +670,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       });
 
       stagingContainer.add(rawC);
+      attachMeridianoWordmark(stagingContainer);
       // Use exact calibrated container scale & rotation to match chassis receiver
       stagingContainer.scale.set(...APPROVED_TRUCK_ASSEMBLY_CONFIG.container.scale);
       stagingContainer.rotation.y = -Math.PI / 2;
@@ -833,6 +834,35 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
 
       if (stagingContainer && truckAssembly) {
         const truckCont = truckAssembly.getObjectByName('Container');
+        // Match the real receiver geometry, rather than assuming the container
+        // belongs at an arbitrary world X/Y/Z. This target is stable while the
+        // truck moves because it is measured with TruckTravelRoot at rest.
+        if (!stagingContainer.userData.loadingTarget && truckCont && truckTravelRoot) {
+          const previousTruckPosition = truckTravelRoot.position.clone();
+          const previousStagingPosition = stagingContainer.position.clone();
+          truckTravelRoot.position.set(0, 0, 0);
+          stagingContainer.position.set(0, 0, 0);
+          truckTravelRoot.updateMatrixWorld(true);
+          stagingContainer.updateMatrixWorld(true);
+          const receiver = new THREE.Box3().setFromObject(truckCont);
+          const staged = new THREE.Box3().setFromObject(stagingContainer);
+          if (!receiver.isEmpty() && !staged.isEmpty()) {
+            const receiverCenter = receiver.getCenter(new THREE.Vector3());
+            const stagedCenter = staged.getCenter(new THREE.Vector3());
+            stagingContainer.userData.loadingTarget = new THREE.Vector3(
+              receiverCenter.x - stagedCenter.x,
+              receiver.min.y - staged.min.y,
+              receiverCenter.z - stagedCenter.z
+            );
+          }
+          stagingContainer.position.copy(previousStagingPosition);
+          truckTravelRoot.position.copy(previousTruckPosition);
+          truckTravelRoot.updateMatrixWorld(true);
+          stagingContainer.updateMatrixWorld(true);
+        }
+        const receiverTarget: THREE.Vector3 = stagingContainer.userData.loadingTarget
+          ?? new THREE.Vector3(0, 1.41, 4.9);
+        const loadingZ = receiverTarget.z;
         if (p < 0.16) {
           const loadT = p / 0.16;
 
@@ -905,7 +935,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           else if (loadT < 0.75) {
             const t5 = (loadT - 0.55) / (0.75 - 0.55);
             const s5 = 0.5 - 0.5 * Math.cos(t5 * Math.PI);
-            stackerX = THREE.MathUtils.lerp(5.5, 0.0, s5);
+            stackerX = THREE.MathUtils.lerp(5.5, receiverTarget.x, s5);
             contX = stackerX;
             contY = 3.20;
             spreaderY = 3.567;
@@ -917,9 +947,9 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           else if (loadT < 0.88) {
             const t6 = (loadT - 0.75) / (0.88 - 0.75);
             const s6 = Math.pow(t6, 1.25);
-            stackerX = 0.0;
-            contX = 0.0;
-            contY = THREE.MathUtils.lerp(3.20, 1.41, s6);
+            stackerX = receiverTarget.x;
+            contX = receiverTarget.x;
+            contY = THREE.MathUtils.lerp(3.20, receiverTarget.y, s6);
             spreaderY = contY + 0.367;
             boomElevation = THREE.MathUtils.lerp(0.44, 0.16, s6);
             boomExtension = THREE.MathUtils.lerp(1.8, 0.8, s6);
@@ -928,9 +958,9 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           // Stage 7: Release container
           else if (loadT < 0.94) {
             const t7 = (loadT - 0.88) / (0.94 - 0.88);
-            stackerX = 0.0;
-            contX = 0.0;
-            contY = 1.41;
+            stackerX = receiverTarget.x;
+            contX = receiverTarget.x;
+            contY = receiverTarget.y;
             spreaderY = THREE.MathUtils.lerp(1.777, 2.15, t7);
             boomElevation = THREE.MathUtils.lerp(0.16, 0.22, t7);
             boomExtension = 0.8;
@@ -939,9 +969,9 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           // Stage 8: Reach stacker withdraws
           else {
             const t8 = (loadT - 0.94) / (1.00 - 0.94);
-            stackerX = THREE.MathUtils.lerp(0.0, 3.8, t8);
-            contX = 0.0;
-            contY = 1.41;
+            stackerX = THREE.MathUtils.lerp(receiverTarget.x, receiverTarget.x + 3.8, 0.5 - 0.5 * Math.cos(t8 * Math.PI));
+            contX = receiverTarget.x;
+            contY = receiverTarget.y;
             spreaderY = 2.15;
             boomElevation = 0.22;
             boomExtension = 0.8;
@@ -965,17 +995,17 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           else if (loadT < 0.88) spreaderY = topY + 0.04;
           else spreaderY = topY + 0.04 + 0.45 * THREE.MathUtils.clamp((loadT - 0.88) / 0.12, 0, 1);
 
-          stagingContainer.position.set(contX, contY, 4.9);
+          stagingContainer.position.set(contX, contY, loadingZ);
           stagingContainer.visible = true;
           if (truckCont) truckCont.visible = false;
 
           if (handlerRig) {
             // Align the center of the *actual* spreader to the container center,
             // while retaining the approach/withdrawal offset along X.
-            handlerRig.alignSpreaderTo(contX, 4.9, stackerX - contX);
+            handlerRig.alignSpreaderTo(contX, loadingZ, stackerX - contX);
             handlerRig.root.position.y = 0;
             handlerRig.setBoomPose(boomElevation, boomExtension);
-            handlerRig.setSpreaderPose(new THREE.Vector3(contX, spreaderY, 4.9), twistlocksEngaged);
+            handlerRig.setSpreaderPose(new THREE.Vector3(contX, spreaderY, loadingZ), twistlocksEngaged);
             handlerRig.setWheelTravel(8.5 - stackerX);
           }
         } else {
@@ -988,16 +1018,16 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
             if (p < 0.28) {
               const withdrawT = (p - 0.16) / (0.28 - 0.16);
               const smoothWithdraw = 0.5 - 0.5 * Math.cos(withdrawT * Math.PI);
-              const withdrawX = THREE.MathUtils.lerp(3.8, 12.0, smoothWithdraw);
-              handlerRig.root.position.set(withdrawX, 0, 4.9);
-              handlerRig.setBoomPose(THREE.MathUtils.lerp(0.22, 0.15, smoothWithdraw), 0.5);
-              handlerRig.setSpreaderPose(new THREE.Vector3(withdrawX, 3.1, 4.9), false);
-              handlerRig.setWheelTravel(8.5 - 0.0 + withdrawX);
-            } else {
-              handlerRig.root.position.set(12.0, 0, 4.9);
+              const withdrawX = THREE.MathUtils.lerp(receiverTarget.x + 3.8, receiverTarget.x + 12.0, smoothWithdraw);
+              handlerRig.alignSpreaderTo(receiverTarget.x, loadingZ, withdrawX - receiverTarget.x);
               handlerRig.setBoomPose(0.15, 0.5);
-              handlerRig.setSpreaderPose(new THREE.Vector3(12.0, 3.1, 4.9), false);
-              handlerRig.setWheelTravel(8.5 + 12.0);
+              handlerRig.setSpreaderPose(new THREE.Vector3(withdrawX, receiverTarget.y + 3.0, loadingZ), false);
+              handlerRig.setWheelTravel(8.5 + withdrawX);
+            } else {
+              handlerRig.alignSpreaderTo(receiverTarget.x, loadingZ, 12.0);
+              handlerRig.setBoomPose(0.15, 0.5);
+              handlerRig.setSpreaderPose(new THREE.Vector3(receiverTarget.x + 12.0, receiverTarget.y + 3.0, loadingZ), false);
+              handlerRig.setWheelTravel(8.5 + receiverTarget.x + 12.0);
             }
           }
         }
@@ -1009,7 +1039,11 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
         if (p >= 0.16 && p <= 0.52) {
           const driveT = (p - 0.16) / (0.52 - 0.16);
           // Realistic acceleration and straight highway cruise
-          const distanceTravelled = Math.pow(driveT, 1.15) * 135.0;
+          const acceleration = driveT < 0.12
+            ? (driveT * driveT) / 0.12
+            : (0.12 + 2 * (driveT - 0.12));
+          const normalizedTravel = acceleration / (0.12 + 2 * 0.88);
+          const distanceTravelled = normalizedTravel * 135.0;
           truckTravelRoot.position.set(0, 0, -distanceTravelled);
           truckAssembly.userData.setWheelSpin?.(distanceTravelled);
         } else if (p < 0.16) {
