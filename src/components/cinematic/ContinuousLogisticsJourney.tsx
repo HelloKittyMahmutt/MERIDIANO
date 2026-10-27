@@ -10,6 +10,7 @@ import { buildApprovedTruckAssembly, attachMeridianoWordmark, APPROVED_TRUCK_ASS
 import { FORKLIFT_CONFIG } from './forkliftConfig';
 import { buildCalibratedAircraftRig, APPROVED_AIRCRAFT_CONFIG } from './aircraftConfig';
 import { buildContainerHandlerRig, ContainerHandlerRig } from './containerHandlerRig';
+import { applyMeridianoHandlerLivery } from './meridianoHandlerLivery';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -62,74 +63,290 @@ const createAsphaltTexture = (): THREE.CanvasTexture => {
   return texture;
 };
 
+// Subtle large-format concrete, without the conspicuous simulation grid.
 const createConcreteApronTexture = (): THREE.CanvasTexture => {
-  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return new THREE.CanvasTexture(canvas);
-
-  ctx.fillStyle = '#3c4550';
-  ctx.fillRect(0, 0, 512, 512);
-
-  const imgData = ctx.getImageData(0, 0, 512, 512);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 18;
-    const base = 68 + noise;
-    data[i] = THREE.MathUtils.clamp(base - 1, 40, 105);
-    data[i + 1] = THREE.MathUtils.clamp(base, 40, 105);
-    data[i + 2] = THREE.MathUtils.clamp(base + 3, 40, 110);
-    data[i + 3] = 255;
+  canvas.width = canvas.height = 1024;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#8d9391';
+  ctx.fillRect(0, 0, 1024, 1024);
+  // Deterministic aggregate/grain; avoid random flicker across page loads.
+  let seed = 14723;
+  const rand = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  const pixels = ctx.getImageData(0, 0, 1024, 1024);
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    const n = (rand() - 0.5) * 26;
+    pixels.data[i] = 139 + n;
+    pixels.data[i + 1] = 145 + n;
+    pixels.data[i + 2] = 146 + n;
   }
-  ctx.putImageData(imgData, 0, 0);
-
-  ctx.strokeStyle = '#272d36';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(0, 0, 512, 512);
+  ctx.putImageData(pixels, 0, 0);
+  // Long, restrained expansion joints rather than dark square tiles.
+  ctx.strokeStyle = 'rgba(48, 59, 63, 0.075)';
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(256, 0);
-  ctx.lineTo(256, 512);
-  ctx.moveTo(0, 256);
-  ctx.lineTo(512, 256);
+  ctx.moveTo(0, 0); ctx.lineTo(0, 1024);
+  ctx.moveTo(512, 0); ctx.lineTo(512, 1024);
+  ctx.moveTo(0, 0); ctx.lineTo(1024, 0);
+  ctx.moveTo(0, 512); ctx.lineTo(1024, 512);
   ctx.stroke();
+  // Soft rubber tire traces and localized concrete wear.
+  for (let j = 0; j < 14; j++) {
+    ctx.fillStyle = `rgba(51, 60, 61, ${0.008 + rand() * 0.018})`;
+    ctx.beginPath();
+    ctx.ellipse(rand() * 1024, rand() * 1024, 25 + rand() * 95, 3 + rand() * 12, rand() * 6.28, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 3);
+  tex.anisotropy = 8;
+  return tex;
+};
 
+// V19: Paint the fuselage skin, rather than adding billboard lettering.
+// The source model's JAL markings are geometry/material details, not the red
+// roundel texture. Sample the actual outer skin with rays, then lay a very thin
+// opaque painted surface over the original airline markings. Both sides share
+// the same readable, non-mirrored lettering and no floating signs are used.
+function applyMeridianoAircraftLivery(raw: THREE.Group): void {
+  raw.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const repaint = (material: THREE.Material): THREE.Material => {
+      const name = material.name.toLowerCase();
+      if (name === '0020_red') {
+        return new THREE.MeshStandardMaterial({
+          name: 'MERIDIANO navy tail and winglets',
+          color: 0x102b4b, roughness: 0.56, metalness: 0.08,
+          side: THREE.DoubleSide,
+        });
+      }
+      if (name === 'japan') {
+        return new THREE.MeshStandardMaterial({
+          name: 'MERIDIANO clean white roundel',
+          color: 0xf2f5f7, roughness: 0.62, metalness: 0.04,
+          side: THREE.DoubleSide,
+        });
+      }
+      return material;
+    };
+    if (Array.isArray(object.material)) object.material = object.material.map(repaint);
+    else object.material = repaint(object.material);
+  });
+
+  // Aircraft skin in the source GLB is distributed across two fuselage meshes.
+  // Use real ray intersections to follow its tapered nose and curved sides.
+  raw.updateMatrixWorld(true);
+  const fuselageMeshes: THREE.Mesh[] = [];
+  raw.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && (obj.name === 'Object_5' || obj.name === 'Object_260')) {
+      fuselageMeshes.push(obj);
+    }
+  });
+  if (!fuselageMeshes.length) {
+    console.warn('[MERIDIANO] Aircraft fuselage skin not found; no livery panels added.');
+    return;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2048;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  // The solid paint masks the old airline wordmark, with restrained navy type.
+  ctx.fillStyle = '#f1f4f6';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#102b4b';
+  ctx.font = '700 164px Arial, Helvetica, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('MERIDIANO', 1024, 131, 1800);
   const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(8, 6);
+  texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
+  const material = new THREE.MeshStandardMaterial({
+    name: 'MERIDIANO conforming fuselage paint', map: texture,
+    color: 0xffffff, roughness: 0.69, metalness: 0.03,
+    side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+  });
+
+  // Centerline follows the raised nose and descends toward the main cabin.
+  const centerY = (z: number): number => {
+    const points: Array<[number, number]> = [
+      [-2830, 330], [-2700, 311], [-2500, 291],
+      [-2380, 276], [-2200, 256], [-1950, 252], [-1600, 252],
+    ];
+    for (let i = 1; i < points.length; i++) {
+      if (z <= points[i][0]) {
+        const t = THREE.MathUtils.clamp((z - points[i - 1][0]) / (points[i][0] - points[i - 1][0]), 0, 1);
+        return THREE.MathUtils.lerp(points[i - 1][1], points[i][1], t);
+      }
+    }
+    return 252;
+  };
+
+  const raycaster = new THREE.Raycaster();
+  const direction = new THREE.Vector3();
+  const origin = new THREE.Vector3();
+  const widthSegments = 72;
+  const heightSegments = 12;
+  const startZ = -2810;
+  const endZ = -1570;
+
+  for (const side of [-1, 1]) {
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    let missingHits = 0;
+    direction.set(-side, 0, 0);
+    for (let iy = 0; iy <= heightSegments; iy++) {
+      const v = iy / heightSegments;
+      for (let ix = 0; ix <= widthSegments; ix++) {
+        const u = ix / widthSegments;
+        const z = THREE.MathUtils.lerp(startZ, endZ, u);
+        const y = centerY(z) + (v - 0.5) * 75;
+        origin.set(987 + side * 1600, y, z);
+        raycaster.set(origin, direction);
+        raycaster.far = 1800;
+        let hit = raycaster.intersectObjects(fuselageMeshes, false)[0];
+        if (!hit) {
+          // The CAD source has tiny discontinuities at some fuselage seams.
+          // Sample an adjacent scanline rather than using a floating fallback.
+          for (const offset of [-2, 2, -6, 6, -12, 12]) {
+            origin.y = y + offset;
+            raycaster.set(origin, direction);
+            hit = raycaster.intersectObjects(fuselageMeshes, false)[0];
+            if (hit) break;
+          }
+        }
+        if (!hit) missingHits++;
+        const x = hit ? hit.point.x + side * 1.7 : 987 + side * 113;
+        positions.push(x, y, z);
+        // Camera tracks from the negative-X side. On that side increasing Z
+        // runs left-to-right in screen space, so do NOT reverse its UVs.
+        uvs.push(side < 0 ? u : 1 - u, v);
+        if (ix < widthSegments && iy < heightSegments) {
+          const a = iy * (widthSegments + 1) + ix;
+          const b = a + widthSegments + 1;
+          indices.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+      }
+    }
+    if (missingHits > (widthSegments + 1) * (heightSegments + 1) * 0.25) {
+      console.warn('[MERIDIANO] Aircraft paint surface incomplete; skipping side', side);
+      continue;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const paint = new THREE.Mesh(geometry, material);
+    paint.name = side < 0 ? 'MERIDIANO port painted fuselage' : 'MERIDIANO starboard painted fuselage';
+    paint.castShadow = false;
+    paint.receiveShadow = false;
+    raw.add(paint);
+  }
+}
+
+// Layered atmospheric sky painted on a lightweight canvas texture.
+const createPortSkyTexture = (): THREE.CanvasTexture => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024; canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+  const sky = ctx.createLinearGradient(0, 0, 0, 512);
+  sky.addColorStop(0, '#304e6b');
+  sky.addColorStop(0.42, '#7798ad');
+  sky.addColorStop(0.75, '#c9c3b8');
+  sky.addColorStop(1, '#ead0af');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, 1024, 512);
+  let seed = 5319;
+  const rand = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  // Diffuse cloud banks. Soft overlapping ellipses instead of sharp cartoon shapes.
+  for (let layer = 0; layer < 3; layer++) {
+    for (let i = 0; i < 85; i++) {
+      const x = rand() * 1150 - 60;
+      const y = 110 + layer * 73 + rand() * 90;
+      const rx = 35 + rand() * 105;
+      const ry = 7 + rand() * 23;
+      const cloud = ctx.createRadialGradient(x, y, 0, x, y, rx);
+      const alpha = layer === 0 ? 0.13 : layer === 1 ? 0.18 : 0.12;
+      cloud.addColorStop(0, `rgba(240,244,246,${alpha})`);
+      cloud.addColorStop(0.55, `rgba(229,234,238,${alpha * 0.5})`);
+      cloud.addColorStop(1, 'rgba(230,234,239,0)');
+      ctx.save(); ctx.translate(x, y); ctx.scale(1, ry / rx);
+      ctx.translate(-x, -y);
+      ctx.fillStyle = cloud;
+      ctx.fillRect(x - rx, y - rx, rx * 2, rx * 2);
+      ctx.restore();
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+};
+
+// Deterministic multi-frequency harbor ripples. Keep this a normal map, not
+// displaced geometry, so the sea remains lightweight on mobile GPUs.
+const createWaterNormalTexture = (): THREE.CanvasTexture => {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  const image = ctx.createImageData(256, 256);
+  const data = image.data;
+  const heightAt = (x: number, y: number) =>
+    Math.sin(y * 0.13 + Math.sin(x * 0.043) * 1.7) * 0.55 +
+    Math.sin(y * 0.28 - x * 0.057) * 0.22 +
+    Math.sin(x * 0.19 + y * 0.091) * 0.11 +
+    Math.sin(x * 0.067 - y * 0.036) * 0.25;
+  for (let y = 0; y < 256; y++) {
+    for (let x = 0; x < 256; x++) {
+      const dx = heightAt(x + 1, y) - heightAt(x - 1, y);
+      const dy = heightAt(x, y + 1) - heightAt(x, y - 1);
+      const i = (y * 256 + x) * 4;
+      data[i] = THREE.MathUtils.clamp(128 - dx * 88, 0, 255);
+      data[i + 1] = THREE.MathUtils.clamp(128 - dy * 88, 0, 255);
+      data[i + 2] = 250;
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(34, 25);
   return texture;
 };
 
-const createWaterNormalTexture = (): THREE.CanvasTexture => {
-  if (typeof document === 'undefined') return new THREE.CanvasTexture({} as HTMLCanvasElement);
+// Muted slate-blue water with directional wavelets and occasional narrow
+// sky highlights. No mirror-like black or uniformly striped tiling.
+const createHarborWaterTexture = (): THREE.CanvasTexture => {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return new THREE.CanvasTexture(canvas);
-
-  const imgData = ctx.createImageData(256, 256);
-  const data = imgData.data;
-  for (let y = 0; y < 256; y++) {
-    for (let x = 0; x < 256; x++) {
-      const idx = (y * 256 + x) * 4;
-      const waveX = Math.sin((x / 256) * Math.PI * 8) * 20;
-      const waveY = Math.cos((y / 256) * Math.PI * 8) * 20;
-      data[idx] = THREE.MathUtils.clamp(128 + waveX, 0, 255);
-      data[idx + 1] = THREE.MathUtils.clamp(128 + waveY, 0, 255);
-      data[idx + 2] = 255;
-      data[idx + 3] = 255;
+  canvas.width = canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+  const image = ctx.createImageData(512, 512);
+  const data = image.data;
+  for (let y = 0; y < 512; y++) {
+    for (let x = 0; x < 512; x++) {
+      const broad = Math.sin(y * 0.071 + Math.sin(x * 0.025) * 2.2);
+      const ripple = Math.sin(y * 0.32 - x * 0.046 + Math.sin(x * 0.09)) * 0.48;
+      const cross = Math.sin(x * 0.085 + y * 0.048) * 0.35;
+      const shimmer = Math.max(0, broad * 0.75 + ripple * 0.5 - 0.64);
+      const variation = broad * 5 + ripple * 3.2 + cross * 2.7 + shimmer * 17;
+      const i = (y * 512 + x) * 4;
+      data[i] = THREE.MathUtils.clamp(49 + variation, 0, 255);
+      data[i + 1] = THREE.MathUtils.clamp(91 + variation, 0, 255);
+      data[i + 2] = THREE.MathUtils.clamp(113 + variation * 1.06, 0, 255);
+      data[i + 3] = 255;
     }
   }
-  ctx.putImageData(imgData, 0, 0);
-
+  ctx.putImageData(image, 0, 0);
   const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(24, 24);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(9, 11);
+  texture.anisotropy = 8;
   return texture;
 };
 
@@ -204,71 +421,72 @@ const MASTER_KEYFRAMES: Keyframe[] = [
   },
   {
     progress: 0.48,
-    camPos: new THREE.Vector3(13.0, 6.2, -76.0),
-    target: new THREE.Vector3(-6.0, 3.2, -100.0),
-    fov: 42,
+    camPos: new THREE.Vector3(14.0, 7.5, -76.0),
+    target: new THREE.Vector3(-5.0, 2.8, -106.0),
+    fov: 41,
   },
   {
     progress: 0.52,
-    camPos: new THREE.Vector3(16.0, 8.5, -95.0),
-    target: new THREE.Vector3(-16.0, 4.5, -135.0),
-    fov: 44,
+    camPos: new THREE.Vector3(15.0, 10.0, -104.0),
+    target: new THREE.Vector3(-20.0, 4.0, -151.0),
+    fov: 42,
   },
 
-  // 4. CONTAINER SHIP & MARITIME HARBOR BASIN (0.52 - 0.72)
+  // 4. Harbor-side vessel tracking. Look across the water, not through
+  // the truck/ship hull or from the roadway directly below the ship.
   {
     progress: 0.58,
-    camPos: new THREE.Vector3(24.0, 12.0, -120.0),
-    target: new THREE.Vector3(-22.0, 5.5, -165.0),
-    fov: 44,
+    camPos: new THREE.Vector3(13.0, 14.0, -140.0),
+    target: new THREE.Vector3(-49.0, 5.5, -219.0),
+    fov: 40,
   },
   {
     progress: 0.65,
-    camPos: new THREE.Vector3(20.0, 18.0, -150.0),
-    target: new THREE.Vector3(-20.0, 7.0, -195.0),
-    fov: 43,
+    camPos: new THREE.Vector3(-2.0, 20.0, -168.0),
+    target: new THREE.Vector3(-59.0, 5.0, -245.0),
+    fov: 39,
   },
   {
     progress: 0.72,
-    camPos: new THREE.Vector3(12.0, 45.0, -190.0),
-    target: new THREE.Vector3(-10.0, 12.0, -230.0),
-    fov: 44,
+    camPos: new THREE.Vector3(-22.0, 37.0, -199.0),
+    target: new THREE.Vector3(-58.0, 9.0, -271.0),
+    fov: 41,
   },
 
-  // 5. GLOBAL REVEAL & VERTICAL SCREEN AIRCRAFT COMPOSITION (0.72 - 0.88)
-  // Overhead corridor perspective: camera tracks along centerline (X=0) high above flight path
-  // Nose-to-tail axis appears strictly vertical on screen (0° tilt), nose toward top of screen
+  // 5. AIRCRAFT: cinematic 3/4 side tracking, NOT the overhead/top-down view.
+  // The actual tracking positions are tied to the aircraft below so it stays
+  // in shot even when its speed changes; these keyframes provide the handoff.
   {
     progress: 0.77,
-    camPos: new THREE.Vector3(0.0, 195.0, -280.0),
-    target: new THREE.Vector3(0.0, 122.0, -370.0),
-    fov: 40,
+    camPos: new THREE.Vector3(-96.0, 150.0, -280.0),
+    target: new THREE.Vector3(0, 124, -372.0),
+    fov: 41,
   },
   {
     progress: 0.82,
-    camPos: new THREE.Vector3(0.0, 215.0, -325.0),
-    target: new THREE.Vector3(0.0, 122.0, -425.0),
-    fov: 38,
-  },
-  {
-    progress: 0.88,
-    camPos: new THREE.Vector3(0.0, 235.0, -385.0),
-    target: new THREE.Vector3(0.0, 122.0, -500.0),
-    fov: 38,
-  },
-
-  // 6. FINAL STATEMENT & RECEDING HORIZON (0.88 - 1.00)
-  {
-    progress: 0.94,
-    camPos: new THREE.Vector3(0.0, 250.0, -450.0),
-    target: new THREE.Vector3(0.0, 122.0, -590.0),
+    camPos: new THREE.Vector3(-98.0, 148.0, -305.0),
+    target: new THREE.Vector3(0, 124, -395.0),
     fov: 40,
   },
   {
-    progress: 1.00,
-    camPos: new THREE.Vector3(0.0, 260.0, -530.0),
-    target: new THREE.Vector3(0.0, 122.0, -690.0),
+    progress: 0.88,
+    camPos: new THREE.Vector3(-100.0, 149.0, -330.0),
+    target: new THREE.Vector3(0, 124, -425.0),
+    fov: 40,
+  },
+
+  // 6. Final fade: maintain a believable rear-quarter aircraft perspective.
+  {
+    progress: 0.94,
+    camPos: new THREE.Vector3(-105.0, 151.0, -425.0),
+    target: new THREE.Vector3(0, 124, -515.0),
     fov: 42,
+  },
+  {
+    progress: 1.00,
+    camPos: new THREE.Vector3(-114.0, 155.0, -575.0),
+    target: new THREE.Vector3(0, 124, -665.0),
+    fov: 44,
   },
 ];
 
@@ -287,6 +505,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
   const [isMuted, setIsMuted] = useState<boolean>(true);
   const [currentProgress, setCurrentProgress] = useState<number>(0);
   const [showTechnicalNote, setShowTechnicalNote] = useState<boolean>(false);
+  const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < 768);
 
   // Three.js References
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -379,14 +598,15 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const mobileAtStart = window.innerWidth < 768;
 
     // 1. Scene, Camera, Renderer
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const daylightSky = new THREE.Color(0xd2e0ed);
+    const daylightSky = new THREE.Color(0xa8bac7);
     scene.background = daylightSky;
-    scene.fog = new THREE.Fog(0xd2e0ed, 75, 480);
+    scene.fog = new THREE.Fog(0xa8bac7, 95, 440);
 
     const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 1500);
     camera.position.set(9.4, 3.8, 6.4);
@@ -395,12 +615,12 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
 
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: !mobileAtStart,
       powerPreference: 'high-performance',
       precision: 'highp',
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobileAtStart ? 1.25 : 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -408,14 +628,14 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     rendererRef.current = renderer;
 
     // 2. Lighting Rig
-    const ambientLight = new THREE.AmbientLight(0xd4e2f0, 0.65);
+    const ambientLight = new THREE.AmbientLight(0xd7e5f0, 0.72);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfff8ed, 1.75);
-    sunLight.position.set(45, 60, 35);
+    const sunLight = new THREE.DirectionalLight(0xffd4a4, 2.35);
+    sunLight.position.set(45, 42, 28);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.mapSize.width = mobileAtStart ? 1024 : 2048;
+    sunLight.shadow.mapSize.height = mobileAtStart ? 1024 : 2048;
     sunLight.shadow.camera.near = 5;
     sunLight.shadow.camera.far = 280;
     sunLight.shadow.camera.left = -45;
@@ -426,26 +646,13 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     scene.add(sunLight);
     modelsRef.current.sunLight = sunLight;
 
-    const fillLight = new THREE.DirectionalLight(0x94b4cf, 0.4);
+    const fillLight = new THREE.DirectionalLight(0x94b4cf, 0.55);
     fillLight.position.set(-30, 20, -25);
     scene.add(fillLight);
 
     // 3. Sky Dome Mesh
     const skyGeo = new THREE.SphereGeometry(950, 32, 20, 0, Math.PI * 2, 0, Math.PI * 0.5);
-    const skyCanvas = document.createElement('canvas');
-    skyCanvas.width = 128;
-    skyCanvas.height = 512;
-    const skyCtx = skyCanvas.getContext('2d');
-    if (skyCtx) {
-      const grad = skyCtx.createLinearGradient(0, 0, 0, 512);
-      grad.addColorStop(0.0, '#3e6a96');
-      grad.addColorStop(0.45, '#7fa3c5');
-      grad.addColorStop(0.85, '#bed3e6');
-      grad.addColorStop(1.0, '#d2e0ed');
-      skyCtx.fillStyle = grad;
-      skyCtx.fillRect(0, 0, 128, 512);
-    }
-    const skyTexture = new THREE.CanvasTexture(skyCanvas);
+    const skyTexture = createPortSkyTexture();
     const skyMat = new THREE.MeshBasicMaterial({
       map: skyTexture,
       side: THREE.BackSide,
@@ -457,15 +664,15 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     scene.add(skyMesh);
 
     // 4. Terminal Staging Apron & Infrastructure (Z: 20 to -35)
-    const apronGeo = new THREE.PlaneGeometry(80, 60);
+    const apronGeo = new THREE.PlaneGeometry(100, 85);
     const apronMat = new THREE.MeshStandardMaterial({
       map: createConcreteApronTexture(),
-      roughness: 0.72,
-      metalness: 0.12,
+      roughness: 0.91,
+      metalness: 0.02,
     });
     const apronMesh = new THREE.Mesh(apronGeo, apronMat);
     apronMesh.rotation.x = -Math.PI / 2;
-    apronMesh.position.set(6, 0, 0);
+    apronMesh.position.set(6, -0.012, -8);
     apronMesh.receiveShadow = true;
     scene.add(apronMesh);
 
@@ -506,6 +713,102 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     stackGroup.add(createDummyContainer(2.6, 2.9, 12.2, stackMatGreen, [15.0, 4.35, -125.0]));
     scene.add(stackGroup);
 
+    // Distant terminal buildings and gantry silhouettes. Kept away from the
+    // active loading bay and below the main cinematic camera sightline.
+    const terminalBackground = new THREE.Group();
+    const warehouseMat = new THREE.MeshStandardMaterial({ color: 0x8797a0, roughness: 0.88 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x4a5a65, roughness: 0.8 });
+    for (const [x, z, width, depth, height] of [
+      [-29, -54, 21, 14, 7], [30, -70, 27, 17, 9], [-32, -98, 18, 14, 6], [30, -114, 22, 15, 8]
+    ]) {
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), warehouseMat);
+      hall.position.set(x, height / 2 - 0.1, z);
+      hall.castShadow = true; hall.receiveShadow = true;
+      terminalBackground.add(hall);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(width + 0.6, 0.35, depth + 0.6), roofMat);
+      roof.position.set(x, height + 0.1, z);
+      terminalBackground.add(roof);
+    }
+    const gantryMat = new THREE.MeshStandardMaterial({ color: 0x536778, roughness: 0.68, metalness: 0.38 });
+    for (const x of [-48, 48]) {
+      const z = -125;
+      const gantry = new THREE.Group();
+      for (const offset of [-8, 8]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.7, 23, 0.8), gantryMat);
+        leg.position.set(offset, 11.5, 0);
+        gantry.add(leg);
+      }
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(24, 1.1, 1.1), gantryMat);
+      beam.position.set(0, 22.5, 0);
+      gantry.add(beam);
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(14, 0.5, 0.6), gantryMat);
+      upper.position.set(0, 25, 0);
+      gantry.add(upper);
+      gantry.position.set(x, 0, z);
+      terminalBackground.add(gantry);
+    }
+    // Background industrial silhouettes sit OUTSIDE the working loading bay.
+    // Their small details break up the former blank-box appearance without
+    // adding expensive imported meshes or interfering with the reach stacker.
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x435462, roughness: 0.74, metalness: 0.24 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x344f61, roughness: 0.32, metalness: 0.12 });
+    for (const [x, z, width, depth, height] of [
+      [-29, -54, 21, 14, 7], [30, -70, 27, 17, 9], [-32, -98, 18, 14, 6], [30, -114, 22, 15, 8]
+    ]) {
+      // Warehouse doors, roofline flashing and loading canopies.
+      for (let i = -1; i <= 1; i++) {
+        const door = new THREE.Mesh(new THREE.BoxGeometry(width * 0.18, height * 0.59, 0.08), glassMat);
+        door.position.set(x + i * width * 0.265, height * 0.30, z + depth * 0.505);
+        terminalBackground.add(door);
+        const lintel = new THREE.Mesh(new THREE.BoxGeometry(width * 0.21, 0.13, 0.25), trimMat);
+        lintel.position.set(door.position.x, height * 0.61, door.position.z);
+        terminalBackground.add(lintel);
+      }
+      const roofTrim = new THREE.Mesh(new THREE.BoxGeometry(width + 1, 0.18, 0.25), trimMat);
+      roofTrim.position.set(x, height + 0.24, z + depth / 2);
+      terminalBackground.add(roofTrim);
+    }
+    // High-mast yard lights placed along the perimeter, never inside the loading path.
+    const lampSteel = new THREE.MeshStandardMaterial({ color: 0x65747b, roughness: 0.54, metalness: 0.55 });
+    const lampGlow = new THREE.MeshBasicMaterial({ color: 0xffe5b5 });
+    for (const [x, z] of [[-37, -16], [40, -25], [-38, -72], [39, -100], [-36, -133]]) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.19, 17, 7), lampSteel);
+      pole.position.set(x, 8.5, z);
+      terminalBackground.add(pole);
+      const crossbar = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.16, 0.2), lampSteel);
+      crossbar.position.set(x, 17, z);
+      terminalBackground.add(crossbar);
+      for (const dx of [-1.15, 1.15]) {
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.09, 0.42), lampGlow);
+        head.position.set(x + dx, 16.86, z);
+        terminalBackground.add(head);
+      }
+    }
+    // Real-world scale cues: low dock bollards and concrete barriers along
+    // the distant waterfront, leaving the foreground staging bay clear.
+    const barrierMat = new THREE.MeshStandardMaterial({ color: 0x9ca4a2, roughness: 0.93 });
+    for (let i = 0; i < 16; i++) {
+      const x = -46 + i * 6;
+      const barrier = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.75, 0.7), barrierMat);
+      barrier.position.set(x, 0.37, -139);
+      terminalBackground.add(barrier);
+    }
+    scene.add(terminalBackground);
+
+    // Low, continuous port-grade terrain beneath the terminal and road.
+    // It ends at the quay: no concrete or terrain under the ocean/ship.
+    const harborLand = new THREE.Mesh(
+      new THREE.PlaneGeometry(210, 168),
+      new THREE.MeshStandardMaterial({
+        map: createConcreteApronTexture(), roughness: 0.99, metalness: 0,
+        color: 0xadb3ac,
+      }),
+    );
+    harborLand.rotation.x = -Math.PI / 2;
+    harborLand.position.set(0, -0.070, -58.0); // Z from +26 to -142.
+    harborLand.receiveShadow = true;
+    scene.add(harborLand);
+
     // 5. Port Access Highway Road (Z: -20 to -145)
     const roadGroup = new THREE.Group();
     const roadGeo = new THREE.PlaneGeometry(16, 130);
@@ -539,16 +842,66 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       dash.position.set(0, 0.005, z);
       roadGroup.add(dash);
     }
+    // Continuous shoulders visually join the apron to the access road.
+    const shoulderMat = new THREE.MeshStandardMaterial({ color: 0x777f81, roughness: 0.96 });
+    for (const x of [-11.5, 11.5]) {
+      const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(7, 125), shoulderMat);
+      shoulder.rotation.x = -Math.PI / 2;
+      shoulder.position.set(x, -0.028, -85);
+      shoulder.receiveShadow = true;
+      roadGroup.add(shoulder);
+    }
+    // Continuous crash barriers, dark asphalt shoulders and understated
+    // roadside vegetation. Keep the camera corridor completely unobstructed.
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xaab3b7, metalness: 0.65, roughness: 0.38 });
+    const railPostMat = new THREE.MeshStandardMaterial({ color: 0x59656b, metalness: 0.48, roughness: 0.57 });
+    for (const side of [-1, 1]) {
+      const x = side * 8.35;
+      for (const y of [0.62, 0.93]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.16, 120), railMat);
+        rail.position.set(x, y, -84);
+        roadGroup.add(rail);
+      }
+      for (let z = -26; z > -143; z -= 5) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.12, 0.18), railPostMat);
+        post.position.set(x, 0.56, z);
+        roadGroup.add(post);
+      }
+    }
+    // Industrial access-road margins: low ground, not giant empty slabs.
+    const vergeMat = new THREE.MeshStandardMaterial({ color: 0x687268, roughness: 0.98 });
+    for (const x of [-17.7, 17.7]) {
+      const verge = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 115), vergeMat);
+      verge.rotation.x = -Math.PI / 2;
+      verge.position.set(x, -0.047, -83);
+      verge.receiveShadow = true;
+      roadGroup.add(verge);
+    }
+    // Restrained roadside lamps and directional posts outside the road.
+    for (const side of [-1, 1]) {
+      for (const z of [-45, -80, -115]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 8, 6), railPostMat);
+        post.position.set(side * 13.7, 4, z);
+        roadGroup.add(post);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.12, 0.12), railMat);
+        arm.position.set(side * 12.85, 7.9, z);
+        roadGroup.add(arm);
+        const luminaire = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.45), lampGlow);
+        luminaire.position.set(side * 12.0, 7.82, z);
+        roadGroup.add(luminaire);
+      }
+    }
     scene.add(roadGroup);
 
     // 6. Harbor Quay & Deep Ocean Surface (Z: -140 to -900)
     const oceanGeo = new THREE.PlaneGeometry(1600, 1200, 64, 64);
     const oceanMat = new THREE.MeshStandardMaterial({
-      color: 0x14344d,
-      roughness: 0.18,
-      metalness: 0.85,
+      map: createHarborWaterTexture(),
+      color: 0xc5dce6,
+      roughness: 0.49,
+      metalness: 0.02,
       normalMap: createWaterNormalTexture(),
-      normalScale: new THREE.Vector2(0.65, 0.65),
+      normalScale: new THREE.Vector2(0.19, 0.19),
     });
     const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
     oceanMesh.rotation.x = -Math.PI / 2;
@@ -568,17 +921,17 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
 
     // Distant port container gantry cranes along harbor quay edge
     const craneGroup = new THREE.Group();
-    const craneMatOrange = new THREE.MeshStandardMaterial({ color: 0xd95a1e, roughness: 0.45, metalness: 0.4 });
+    const craneMatOrange = new THREE.MeshStandardMaterial({ color: 0xb75b32, roughness: 0.68, metalness: 0.18 });
     for (let i = 0; i < 3; i++) {
-      const cX = -45 - i * 35;
-      const cZ = -195 - i * 20;
-      const craneTower = new THREE.Mesh(new THREE.BoxGeometry(4, 38, 4), craneMatOrange);
-      craneTower.position.set(cX, 16, cZ);
+      const cX = -112 - i * 39;
+      const cZ = -206 - i * 26;
+      const craneTower = new THREE.Mesh(new THREE.BoxGeometry(3.0, 29, 3.0), craneMatOrange);
+      craneTower.position.set(cX, 12, cZ);
       craneTower.castShadow = true;
       craneGroup.add(craneTower);
 
-      const craneBoom = new THREE.Mesh(new THREE.BoxGeometry(32, 3, 3), craneMatOrange);
-      craneBoom.position.set(cX + 12, 33, cZ);
+      const craneBoom = new THREE.Mesh(new THREE.BoxGeometry(26, 2.4, 2.4), craneMatOrange);
+      craneBoom.position.set(cX + 10, 25, cZ);
       craneBoom.castShadow = true;
       craneGroup.add(craneBoom);
     }
@@ -605,6 +958,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     // A. FORKLIFT (Reach Stacker container handler: front facing container with spreader)
     loadGLTF(loader, getModelUrl('forklift.glb'))
       .then((raw) => {
+        applyMeridianoHandlerLivery(raw);
         const handlerRig = buildContainerHandlerRig(raw);
         // Positioned in yard staging bay facing container front-first along -X (grounded at Y = 1.128)
         handlerRig.root.position.set(8.5, 0, 4.9);
@@ -743,13 +1097,15 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
         shipGroup.name = 'ContainerShip';
         shipGroup.add(raw);
 
-        // Authentic container vessel scale: 175m length
+        // The raw model is about 91m long; use a ~150m ship so it reads as
+        // a vessel at cinematic distance, not a structure floating over road.
         const shipLength = Math.max(size.x, size.y, size.z);
-        const scale = 175.0 / shipLength;
+        const scale = 150.0 / shipLength;
         shipGroup.scale.setScalar(scale);
 
-        // Positioned safely in open ocean water at Z = -210, waterline submerged to Y = -3.2
-        shipGroup.position.set(-25.0, -3.2, -210.0);
+        // Keep the entire hull beyond the quay at Z=-145. Sink its keel
+        // around six metres below harbor water (surface Y=-3.2).
+        shipGroup.position.set(-58.0, -9.2, -241.0);
         shipGroup.rotation.y = Math.PI / 2;
 
         scene.add(shipGroup);
@@ -764,8 +1120,21 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     // F. CARGO PLANE GLB (Stage 5)
     loadGLTF(loader, getModelUrl('cargo-plane.glb'))
       .then((raw) => {
-        // Conforms strictly to: AircraftRig → OrientationCorrection → RawCargoPlane
-        const { rig } = buildCalibratedAircraftRig(raw, APPROVED_AIRCRAFT_CONFIG);
+        // The shipped GLB root is already Y-up: its world bounds are
+        // X=-316..2289 (wings), Y=0..770 (height), Z=-3026..-235 (body).
+        // The old -90° X correction pitched its fuselage into a vertical dive.
+        // Yaw 180° reverses +Z nose into our -Z travel direction, level.
+        const levelFlightConfig = {
+          ...APPROVED_AIRCRAFT_CONFIG,
+          orientationCorrection: {
+            ...APPROVED_AIRCRAFT_CONFIG.orientationCorrection,
+            rotationDeg: [0, 180, 0] as [number, number, number],
+            rotationRad: [0, Math.PI, 0] as [number, number, number],
+            rawCenterOffset: [-986.40, -384.98, 1630.68] as [number, number, number],
+          },
+        };
+        applyMeridianoAircraftLivery(raw);
+        const { rig } = buildCalibratedAircraftRig(raw, levelFlightConfig);
         scene.add(rig);
         modelsRef.current.aircraftRig = rig;
         updateProgress();
@@ -787,11 +1156,35 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
 
       // 1. Interpolate Camera along spline
       const { pos, target, fov } = sampleTimeline(p);
+      // Keep the aircraft visibly horizontal in frame with a rear/side chase.
+      // The former nearly overhead camera deliberately framed the airplane
+      // nose-to-tail vertically on screen. Only override AFTER vessel scene.
+      const planeToFollow = modelsRef.current.aircraftRig;
+      let cameraFov = fov;
+      if (p >= 0.735 && planeToFollow) {
+        const follow = THREE.MathUtils.smoothstep(p, 0.735, 0.805);
+        const plane = planeToFollow.position;
+        const chasePos = new THREE.Vector3(plane.x - 115, plane.y + 22, plane.z + 41);
+        const chaseTarget = new THREE.Vector3(plane.x, plane.y + 1, plane.z - 20);
+        pos.lerp(chasePos, follow);
+        target.lerp(chaseTarget, follow);
+        cameraFov = THREE.MathUtils.lerp(fov, 39, follow);
+      }
+      // Portrait screens need a wider vertical field of view so the machine,
+      // vessel and aircraft stay inside the visible frame without changing
+      // any desktop choreography or the actual model animation.
+      const portrait = window.innerWidth < 768 && window.innerHeight > window.innerWidth;
+      if (portrait) {
+        const portraitFactor = THREE.MathUtils.clamp(window.innerHeight / Math.max(window.innerWidth, 1), 1.35, 2.5);
+        cameraFov = Math.min(76, cameraFov + (portraitFactor - 1) * 22);
+        // Keep the camera farther from large port objects in narrow viewports.
+        pos.sub(target).multiplyScalar(1.12).add(target);
+      }
       if (cameraRef.current) {
         cameraRef.current.position.copy(pos);
         cameraRef.current.lookAt(target);
-        if (cameraRef.current.fov !== fov) {
-          cameraRef.current.fov = fov;
+        if (Math.abs(cameraRef.current.fov - cameraFov) > .01) {
+          cameraRef.current.fov = cameraFov;
           cameraRef.current.updateProjectionMatrix();
         }
       }
@@ -799,13 +1192,13 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       // 2. Atmospheric Distance Fog & Sky Color Progression
       if (sceneRef.current && sceneRef.current.fog instanceof THREE.Fog) {
         const fog = sceneRef.current.fog;
-        const groundSky = new THREE.Color(0xd2e0ed);
+        const groundSky = new THREE.Color(0xa8bac7);
         const hazeSky = new THREE.Color(0xdce6f0);
         const stratosphericSky = new THREE.Color(0xb2cae0);
 
         if (p < 0.65) {
-          fog.near = 65;
-          fog.far = 460;
+          fog.near = 95;
+          fog.far = 440;
           fog.color.copy(groundSky);
           sceneRef.current.background = groundSky;
         } else if (p < 0.82) {
@@ -824,6 +1217,15 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
           fog.color.copy(c);
           sceneRef.current.background = c;
         }
+      }
+
+      // Small-scale ripples drift across the surface at a measured rate.
+      const water = modelsRef.current.oceanMesh;
+      if (water) {
+        const waterMaterial = water.material as THREE.MeshStandardMaterial;
+        const t = performance.now() * .000012;
+        if (waterMaterial.normalMap) waterMaterial.normalMap.offset.set(t * 1.1, t * .66);
+        if (waterMaterial.map) waterMaterial.map.offset.set(t * .12, -t * .045);
       }
 
       // 3. Stage 1: Container Loading Operation by Reach Stacker (0.00 -> 0.16)
@@ -1060,12 +1462,13 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       if (shipGroup) {
         if (p >= 0.52 && p <= 0.76) {
           const shipT = (p - 0.52) / (0.76 - 0.52);
-          const shipAdvance = shipT * 42.0;
-          shipGroup.position.z = -210.0 - shipAdvance;
-          // Gentle realistic ocean swell (pitch and roll)
-          shipGroup.rotation.z = Math.sin(p * 22.0) * 0.009;
+          const shipAdvance = shipT * 17.0;
+          shipGroup.position.z = -241.0 - shipAdvance;
+          // Subtle waterborne roll. Keep the model level on average.
+          shipGroup.rotation.z = Math.sin(p * 17.0) * 0.0025;
+          shipGroup.position.y = -9.2 + Math.sin(p * 27.0) * .065;
         } else if (p < 0.52) {
-          shipGroup.position.z = -210.0;
+          shipGroup.position.set(-58.0, -9.2, -241.0);
           shipGroup.rotation.z = 0;
         }
       }
@@ -1098,7 +1501,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       const forklift = modelsRef.current.forklift;
       if (forklift) forklift.visible = p < 0.30;
       if (truckAssembly) truckAssembly.visible = p < 0.60;
-      if (shipGroup) shipGroup.visible = p >= 0.40 && p <= 0.85;
+      if (shipGroup) shipGroup.visible = p >= 0.38 && p <= 0.85;
       if (aircraftRig) aircraftRig.visible = p >= 0.68;
 
       // Audio ambience transition based on progress phase (0: terminal, 1: truck, 2: ship, 3: air)
@@ -1116,6 +1519,9 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
     // Resize Handler
     const handleResize = () => {
       if (!cameraRef.current || !rendererRef.current) return;
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile ? 1.25 : 2));
       cameraRef.current.aspect = window.innerWidth / window.innerHeight;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(window.innerWidth, window.innerHeight);
@@ -1152,14 +1558,14 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       <canvas ref={canvasRef} className="fixed inset-0 w-full h-full block z-0" />
 
       {/* TOP NAVIGATION & CONTROLS */}
-      <header className="fixed top-0 left-0 right-0 z-40 px-6 py-5 flex items-center justify-between pointer-events-auto backdrop-blur-[2px]">
+      <header className="fixed top-0 left-0 right-0 z-40 px-3 py-3 sm:px-6 sm:py-5 flex items-center justify-between pointer-events-auto backdrop-blur-[2px]">
         {/* Brand */}
         <div className="flex items-center gap-3">
           <div className="flex flex-col">
-            <span className="font-montserrat font-black text-xl tracking-[0.28em] text-white">
+            <span className="font-montserrat font-black text-sm sm:text-xl tracking-[0.14em] sm:tracking-[0.28em] text-white">
               MERIDIANO
             </span>
-            <span className="text-[9px] uppercase tracking-[0.35em] text-blue-400/90 font-mono">
+            <span className="hidden sm:block text-[9px] uppercase tracking-[0.35em] text-blue-400/90 font-mono">
               CONTINUOUS LOGISTICS JOURNEY
             </span>
           </div>
@@ -1193,12 +1599,12 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
         </div>
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1.5 sm:gap-2.5">
           {/* Asset Audit / Technical Limitation Modal Button */}
           <button
             onClick={() => setShowTechnicalNote(!showTechnicalNote)}
             title="Inspect 3D Model Technical Specifications & Audit"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0d131f]/80 border border-amber-500/30 hover:border-amber-400 text-amber-300/90 text-xs font-mono transition-all backdrop-blur-md"
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0d131f]/80 border border-amber-500/30 hover:border-amber-400 text-amber-300/90 text-xs font-mono transition-all backdrop-blur-md"
           >
             <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
             <span className="hidden sm:inline text-[11px]">Asset Audit</span>
@@ -1299,130 +1705,51 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
       )}
 
       {/* NARRATIVE EDITORIAL OVERLAYS (SYNCHRONIZED WITH SCROLL PROGRESS) */}
-      <div className="fixed inset-0 pointer-events-none z-20 flex flex-col justify-between p-8 md:p-16">
+      <div className="fixed inset-0 pointer-events-none z-20 flex flex-col justify-between px-4 pt-20 pb-10 sm:p-8 md:p-16">
         {/* TOP STATUS */}
-        <div className="flex justify-between items-start pt-14">
+        <div className="flex justify-between items-start pt-2 sm:pt-14">
           <div className="text-[10px] font-mono tracking-[0.25em] text-blue-400/80 uppercase">
-            {currentProgress < 0.16 && 'PHASE 01 / TERMINAL CONTAINER STAGING'}
-            {currentProgress >= 0.16 && currentProgress < 0.36 && 'PHASE 02 / HIGHWAY CORRIDOR DEPARTURE'}
-            {currentProgress >= 0.36 && currentProgress < 0.52 && 'PHASE 03 / PORT ACCESS ROUTE'}
-            {currentProgress >= 0.52 && currentProgress < 0.72 && 'PHASE 04 / INTERCONTINENTAL OCEAN TRANSIT'}
-            {currentProgress >= 0.72 && currentProgress < 0.88 && 'PHASE 05 / EXPEDITED AIR CORRIDOR'}
-            {currentProgress >= 0.88 && 'PHASE 06 / GLOBAL LOGISTICS PROMISE'}
+            {currentProgress < 0.16 && '01 / LOADING'}
+            {currentProgress >= 0.16 && currentProgress < 0.36 && '02 / ROAD'}
+            {currentProgress >= 0.36 && currentProgress < 0.52 && '03 / HARBOR'}
+            {currentProgress >= 0.52 && currentProgress < 0.72 && '04 / OCEAN'}
+            {currentProgress >= 0.72 && currentProgress < 0.88 && '05 / AIR'}
+            {currentProgress >= 0.88 && 'MERIDIANO / GLOBAL REACH'}
           </div>
 
           <div className="text-[10px] font-mono text-slate-500">
-            {Math.round(currentProgress * 100)}% COMPLETE
+            {Math.round(currentProgress * 100)}%{isMobile ? '' : ' COMPLETE'}
           </div>
         </div>
 
-        {/* MIDGROUND EDITORIAL TITLES */}
-        <div className="max-w-2xl">
-          {/* Phase 1: Terminal Staging (0.00 - 0.16) */}
-          <div
-            className={`transition-all duration-700 transform ${
-              currentProgress < 0.16
-                ? 'opacity-100 translate-y-0'
-                : 'opacity-0 -translate-y-8 pointer-events-none'
-            }`}
-          >
-            <div className="text-xs font-mono uppercase tracking-[0.3em] text-blue-400 mb-2">
-              {lang === 'bg' ? '01 / НАЧАЛО НА ВЕРИГАТА' : '01 / LOGISTICS COMMENCEMENT'}
-            </div>
-            <h1 className="font-montserrat font-black text-3xl md:text-5xl lg:text-6xl tracking-tight text-white uppercase leading-[1.05] mb-4">
-              {lang === 'bg' ? 'ТЕРМИНАЛНО ТОВАРЕНЕ' : 'TERMINAL DISPATCH'}
-            </h1>
-            <p className="text-sm md:text-base text-slate-300 font-light leading-relaxed max-w-lg">
-              {lang === 'bg'
-                ? 'Прецизно позициониране на 40-футовия контейнер върху шасито още от първия метър на логистичния коридор.'
-                : 'Precision mounting of the 40-foot container directly onto the chassis twistlocks from the very first meter of transit.'}
-            </p>
-          </div>
-
-          {/* Phase 2: Truck Departure (0.16 - 0.36) */}
-          <div
-            className={`transition-all duration-700 transform ${
-              currentProgress >= 0.16 && currentProgress < 0.36
-                ? 'opacity-100 translate-y-0'
-                : 'opacity-0 translate-y-8 pointer-events-none'
-            }`}
-          >
-            <div className="text-xs font-mono uppercase tracking-[0.3em] text-blue-400 mb-2">
-              {lang === 'bg' ? '02 / СУХОПЪТЕН КОРИДОР' : '02 / OVERLAND TRANSIT'}
-            </div>
-            <h2 className="font-montserrat font-black text-3xl md:text-5xl lg:text-6xl tracking-tight text-white uppercase leading-[1.05] mb-4">
-              {lang === 'bg' ? 'ДИРЕКТЕН СУХОПЪТЕН РЕЙС' : 'ROAD TRANSPORT'}
-            </h2>
-            <p className="text-sm md:text-base text-slate-300 font-light leading-relaxed max-w-lg">
-              {lang === 'bg'
-                ? 'Калибрираната автокомпозиция потегля към пристанищния терминал с постоянна скорост и непрекъсната проследимост.'
-                : 'Calibrated truck assembly departs towards the deep-water harbor with verified load security and constant velocity.'}
-            </p>
-          </div>
-
-          {/* Phase 3: Port Access Route (0.36 - 0.52) */}
-          <div
-            className={`transition-all duration-700 transform ${
-              currentProgress >= 0.36 && currentProgress < 0.52
-                ? 'opacity-100 translate-y-0'
-                : 'opacity-0 translate-y-8 pointer-events-none'
-            }`}
-          >
-            <div className="text-xs font-mono uppercase tracking-[0.3em] text-blue-400 mb-2">
-              {lang === 'bg' ? '03 / ПРИСТАНИЩЕН ПОДХОД' : '03 / HARBOR CORRIDOR'}
-            </div>
-            <h2 className="font-montserrat font-black text-3xl md:text-5xl lg:text-6xl tracking-tight text-white uppercase leading-[1.05] mb-4">
-              {lang === 'bg' ? 'КЪМ МОРСКИЯ ВЪЗЕЛ' : 'HARBOR APPROACH'}
-            </h2>
-            <p className="text-sm md:text-base text-slate-300 font-light leading-relaxed max-w-lg">
-              {lang === 'bg'
-                ? 'Достъпът по крайбрежния път разкрива контейнерните портални кранове и чакащия презокеански съд.'
-                : 'Approaching the coastal quay, revealing heavy container infrastructure and the awaiting ocean vessel.'}
-            </p>
-          </div>
-
-          {/* Phase 4: Container Ship Maritime Voyage (0.52 - 0.72) */}
-          <div
-            className={`transition-all duration-700 transform ${
-              currentProgress >= 0.52 && currentProgress < 0.72
-                ? 'opacity-100 translate-y-0'
-                : 'opacity-0 translate-y-8 pointer-events-none'
-            }`}
-          >
-            <div className="text-xs font-mono uppercase tracking-[0.3em] text-blue-400 mb-2">
-              {lang === 'bg' ? '04 / МОРСКИ ТРАНЗИТ' : '04 / MARITIME VOYAGE'}
-            </div>
-            <h2 className="font-montserrat font-black text-3xl md:text-5xl lg:text-6xl tracking-tight text-white uppercase leading-[1.05] mb-4">
-              {lang === 'bg' ? 'ПРЕЗОКЕАНСКИ МАЩАБ' : 'OCEAN FREIGHT'}
-            </h2>
-            <p className="text-sm md:text-base text-slate-300 font-light leading-relaxed max-w-lg">
-              {lang === 'bg'
-                ? '175-метровият контейнеровоз поема товара през международните морски маршрути без междинни забавяния.'
-                : 'The 175-meter container vessel traverses international maritime routes connecting manufacturing powerhouses directly.'}
-            </p>
-          </div>
-
-          {/* Phase 5: Air Corridor (0.72 - 0.88) */}
-          <div
-            className={`transition-all duration-700 transform ${
-              currentProgress >= 0.72 && currentProgress < 0.88
-                ? 'opacity-100 translate-y-0'
-                : 'opacity-0 translate-y-8 pointer-events-none'
-            }`}
-          >
-            <div className="text-xs font-mono uppercase tracking-[0.3em] text-blue-400 mb-2">
-              {lang === 'bg' ? '05 / ВЪЗДУШЕН МОСТ' : '05 / AIR CORRIDOR'}
-            </div>
-            <h2 className="font-montserrat font-black text-3xl md:text-5xl lg:text-6xl tracking-tight text-white uppercase leading-[1.05] mb-4">
-              {lang === 'bg' ? 'ЕКСПРЕСЕН ВЪЗДУШЕН ТРАНЗИТ' : 'CARGO AIRLIFT'}
-            </h2>
-            <p className="text-sm md:text-base text-slate-300 font-light leading-relaxed max-w-lg">
-              {lang === 'bg'
-                ? 'Товарен самолет в хоризонтален стратосферен полет гарантира експресна доставка за критични товари.'
-                : 'Heavy cargo aircraft flying level across the stratosphere delivers expedited transit when every hour counts.'}
-            </p>
-          </div>
-
+        {/* V14 / ONE STORY BEAT AT A TIME. Fade captions away around camera handoffs. */}
+        <div className="max-w-[min(90vw,520px)]">
+          {(() => {
+            const beats = [
+              { start: 0, end: .16, label: ['01 / ТОВАРЕНЕ', '01 / LOADING'], title: ['ВСИЧКО ЗАПОЧВА ТУК.', 'EVERY JOURNEY BEGINS HERE.'], line: ['Прецизност от първото движение.', 'Precision from the first move.'] },
+              { start: .16, end: .36, label: ['02 / СУХОПЪТЕН ТРАНСПОРТ', '02 / ROAD'], title: ['ПО ПЪТЯ НАПРЕД.', 'MOVING FORWARD.'], line: ['Свързваме товара с възможностите.', 'Connecting cargo to opportunity.'] },
+              { start: .36, end: .52, label: ['03 / ПРИСТАНИЩЕ', '03 / HARBOR'], title: ['БЕЗ ГРАНИЦИ.', 'BEYOND BORDERS.'], line: ['От пътя към световните маршрути.', 'From the road to global routes.'] },
+              { start: .52, end: .72, label: ['04 / МОРСКИ ТРАНСПОРТ', '04 / OCEAN'], title: ['ПРЕЗ ОКЕАНИ.', 'ACROSS OCEANS.'], line: ['Светът е по-близо, отколкото изглежда.', 'The world is closer than it seems.'] },
+              { start: .72, end: .88, label: ['05 / ВЪЗДУШЕН ТРАНСПОРТ', '05 / AIR'], title: ['ОТВЪД ХОРИЗОНТА.', 'BEYOND THE HORIZON.'], line: ['Когато времето има значение.', 'When every hour matters.'] },
+            ];
+            const beat = beats.find(b => currentProgress >= b.start && currentProgress < b.end);
+            if (!beat) return null;
+            const duration = beat.end - beat.start;
+            const local = (currentProgress - beat.start) / duration;
+            // Hold a clean, text-free frame before the next cinematic shot.
+            const intro = beat.start === 0 ? 1 : THREE.MathUtils.smoothstep(local, .06, .20);
+            const outro = 1 - THREE.MathUtils.smoothstep(local, .70, .92);
+            const visibility = Math.max(0, Math.min(intro, outro));
+            const languageIndex = lang === 'bg' ? 0 : 1;
+            return (
+              <div style={{ opacity: visibility, transform: `translate3d(0, ${12 * (1 - visibility)}px, 0)`, willChange: 'opacity, transform' }}
+                className="border-l-2 border-blue-400/70 pl-3 sm:pl-5 md:pl-7 drop-shadow-lg">
+                <div className="font-mono text-[10px] md:text-xs tracking-[0.25em] text-blue-200/90 uppercase mb-3">{beat.label[languageIndex]}</div>
+                <h1 className="font-montserrat font-bold text-[clamp(1.35rem,5.5vw,3.4rem)] leading-[1.08] tracking-[-0.025em] text-white uppercase mb-3">{beat.title[languageIndex]}</h1>
+                <p className="text-sm md:text-base text-white/80 leading-relaxed font-light">{beat.line[languageIndex]}</p>
+              </div>
+            );
+          })()}
           {/* Phase 6: Final MERIDIANO Statement (0.88 - 1.00) */}
           <div
             className={`transition-all duration-1000 transform ${
@@ -1434,7 +1761,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
             <div className="text-xs md:text-sm font-mono uppercase tracking-[0.35em] text-blue-400 mb-3 font-semibold">
               MERIDIANO &bull; INTERNATIONAL LOGISTICS & SOURCING
             </div>
-            <h2 className="font-montserrat font-black text-4xl md:text-6xl lg:text-7xl tracking-tighter text-white uppercase leading-[0.95] mb-4">
+            <h2 className="font-montserrat font-black text-[clamp(2rem,9vw,4.5rem)] md:text-6xl lg:text-7xl tracking-tighter text-white uppercase leading-[0.95] mb-4">
               {lang === 'bg' ? (
                 <>
                   ОТ СВЕТА<br />
@@ -1455,10 +1782,10 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
                 ? 'Без посреднически надценки, без изкуствени бариери. Пълен контрол от завода в Азия до вашия обект в Европа.'
                 : 'No intermediary markups, no supply chain blind spots. End-to-end sovereignty from origin manufacturers directly to your facility.'}
             </p>
-            <div className="flex items-center gap-4 pointer-events-auto">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 pointer-events-auto">
               <button
                 onClick={handleReplay}
-                className="px-6 py-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs tracking-widest uppercase transition-all shadow-lg flex items-center gap-2"
+                className="px-4 sm:px-6 py-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-mono text-xs tracking-widest uppercase transition-all shadow-lg flex items-center gap-2"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>{lang === 'bg' ? 'ПОВТОРИ ПЪТЕШЕСТВИЕТО' : 'REPLAY JOURNEY'}</span>
@@ -1475,7 +1802,7 @@ export const ContinuousLogisticsJourney: React.FC<ContinuousLogisticsJourneyProp
               {currentProgress < 0.95
                 ? lang === 'bg'
                   ? 'СКРОЛВАЙТЕ ЗА ДА ДВИЖИТЕ ОПЕРАЦИЯТА'
-                  : 'SCROLL TO ADVANCE CONTINUOUS LOGISTICS OPERATION'
+                  : 'SCROLL TO FOLLOW THE JOURNEY'
                 : lang === 'bg'
                 ? 'ОПЕРАЦИЯТА Е ЗАВЪРШЕНА'
                 : 'OPERATION COMPLETED'}

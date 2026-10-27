@@ -1,0 +1,1 @@
+V15: Focused road-to-vessel cinematic camera reveal. Built on V14. Softer, more distant harbor cranes; reduced ship-scene FOV and gradual waterfront framing. Forklift/truck/ship/plane animation and text timing unchanged. Extract at project root with -Force.

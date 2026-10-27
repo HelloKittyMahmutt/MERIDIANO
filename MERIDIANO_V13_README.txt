@@ -1,0 +1,1 @@
+MERIDIANO V13: ocean and ship refinement based on V12. Replace only ContinuousLogisticsJourney.tsx. No changes to forklift, truck, aircraft rig, or camera choreography. Procedural water normals and albedo refined; ocean less metallic; ship bob and roll softened. Refresh ?mode=journey.

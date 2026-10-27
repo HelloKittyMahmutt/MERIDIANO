@@ -1,0 +1,1 @@
+V16: mobile portrait camera framing, responsive typography, lighter mobile renderer, and replacement of the aircraft Japan Airlines livery material with MERIDIANO navy wordmark. Based on V15. Note: livery placement depends on original aircraft UVs; inspect in browser.

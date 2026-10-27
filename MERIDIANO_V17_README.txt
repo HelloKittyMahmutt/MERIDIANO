@@ -1,0 +1,1 @@
+V17: Add independent navy/white MERIDIANO fuselage lettering on both sides of calibrated cargo aircraft, rather than relying on Japan material UVs. Builds on V16. Mobile settings and all cinematic animation unchanged.

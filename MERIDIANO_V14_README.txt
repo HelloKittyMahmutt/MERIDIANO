@@ -1,0 +1,1 @@
+MERIDIANO V14: Minimal editorial captions synchronized to existing 3D scene timings. Replaces only ContinuousLogisticsJourney.tsx from V13. No 3D rig, camera, lighting, or model changes. Backup your project before installing.
